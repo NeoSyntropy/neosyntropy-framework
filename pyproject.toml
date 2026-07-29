@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neosyntropy"
+version = "0.1.0"
+description = "Deterministic AI workflow framework: nodes, edges, axioms, groups, and a control manager over finite-state graphs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "NeoSyntropy" }]
+dependencies = [
+    "pydantic>=2.5",
+    "jsonschema>=4.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["neosyntropy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

@@ -1,0 +1,46 @@
+"""Provider protocol: the execution backend for nodes without handlers."""
+from __future__ import annotations
+
+from collections.abc import Awaitable
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Provider(Protocol):
+    def generate(
+        self, prompt: str, *, schema: dict[str, Any] | None = None
+    ) -> str | Awaitable[str]:
+        """Generate a completion; may be sync or async."""
+        ...
+
+
+class DeterministicProvider:
+    """Default provider: no model, no sampling — echoes the rendered prompt.
+
+    Nodes are deterministic unless explicitly bound to a generative provider,
+    matching the backend's ``provider="deterministic"`` default.
+    """
+
+    def generate(self, prompt: str, *, schema: dict[str, Any] | None = None) -> str:
+        del schema
+        return prompt
+
+
+class ProviderRegistry:
+    def __init__(self, providers: dict[str, Provider] | None = None):
+        self._providers: dict[str, Provider] = {"deterministic": DeterministicProvider()}
+        if providers:
+            self._providers.update(providers)
+
+    def register(self, name: str, provider: Provider) -> None:
+        self._providers[name] = provider
+
+    def get(self, name: str) -> Provider:
+        if name not in self._providers:
+            raise KeyError(
+                f"Unknown provider {name!r}; registered: {sorted(self._providers)}"
+            )
+        return self._providers[name]
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._providers)
