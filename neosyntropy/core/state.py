@@ -1,7 +1,7 @@
 """Concurrency-safe runtime state with one commit per step.
 
 Ported from ``neosyntropy_backend_cli/core/fsm/state.py`` and extended with
-``preview`` so axioms can judge the post-commit state *before* anything
+``preview`` so gates can judge the post-commit state *before* anything
 commits (fail-closed gates run on previews, commits happen after).
 """
 from __future__ import annotations

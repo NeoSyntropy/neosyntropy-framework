@@ -16,8 +16,8 @@ contracts:
 A model proposing an undeclared or unknown tool is a proposal, not
 permission: the call is denied, never executed, and the refusal is reinjected
 so the model can recover. Every attempt — denied, failed, or successful —
-lands in :attr:`~neosyntropy.core.models.NodeResult.tool_calls`, so axioms
-can gate on tool usage and the audit trail stays complete.
+lands in :attr:`~neosyntropy.core.models.NodeResult.tool_calls` so the
+audit trail stays complete.
 """
 from __future__ import annotations
 
@@ -104,8 +104,21 @@ class ParameterExtractor(Protocol):
     ) -> ToolCall: ...
 
 
-async def _generate(provider: Provider, prompt: str, schema: dict | None = None) -> str:
-    output = provider.generate(prompt, schema=schema)
+async def _generate(
+    provider: Provider,
+    prompt: str,
+    schema: dict | None = None,
+    **extra: Any,
+) -> str:
+    kwargs: dict[str, Any] = {"schema": schema}
+    try:
+        params = inspect.signature(provider.generate).parameters
+    except (TypeError, ValueError):
+        params = {}
+    for key, value in extra.items():
+        if key in params and value is not None:
+            kwargs[key] = value
+    output = provider.generate(prompt, **kwargs)
     if inspect.isawaitable(output):
         output = await output
     return str(output)
@@ -193,6 +206,9 @@ class ToolCallingLoop:
         provider: Provider,
         messages: Sequence[dict[str, str]],
         tools: BoundTools,
+        output_schema: dict[str, Any] | None = None,
+        node: Any = None,
+        context: Any = None,
     ) -> ToolLoopResult:
         extractor = self.extractor or ProviderParameterExtractor(
             provider, tools.registry
@@ -206,7 +222,18 @@ class ToolCallingLoop:
 
         while turns < self.max_tool_calls * 2 + 2:
             turns += 1
-            raw = await _generate(provider, _reasoning_prompt(history))
+            # First turn may carry node declarations so the backend can build
+            # the model prompt; later turns continue from conversation history.
+            if turns == 1 and node is not None and context is not None:
+                raw = await _generate(
+                    provider,
+                    _reasoning_prompt(history),
+                    node=node,
+                    context=context,
+                    tools=tools,
+                )
+            else:
+                raw = await _generate(provider, _reasoning_prompt(history))
             visible, tool = parse_tool_trigger(raw)
             if visible:
                 visible_parts.append(visible)
@@ -322,6 +349,15 @@ class ToolCallingLoop:
         else:
             history.append({"role": "tool", "content": "Turn limit reached."})
 
+        if output_schema is not None:
+            structured = await _generate(
+                provider,
+                _structured_output_prompt(history),
+                output_schema,
+            )
+            visible_parts = [structured]
+            history.append({"role": "assistant", "content": structured})
+
         return ToolLoopResult(
             text=" ".join(visible_parts).strip(),
             messages=history,
@@ -331,3 +367,11 @@ class ToolCallingLoop:
 
 def _reasoning_prompt(history: Sequence[dict[str, str]]) -> str:
     return normalize_messages(history) + "\nASSISTANT:"
+
+
+def _structured_output_prompt(history: Sequence[dict[str, str]]) -> str:
+    return (
+        normalize_messages(history)
+        + "\nReturn the final answer as one JSON object matching the supplied schema."
+        "\nJSON:"
+    )

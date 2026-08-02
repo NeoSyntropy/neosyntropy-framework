@@ -6,8 +6,8 @@ extractors plug in without changes. ``@tool`` is the framework name;
 ``neosyntropy`` is kept as a drop-in alias.
 
 Enforcement: node handlers receive a :class:`BoundTools` facade that only
-permits the tools declared on the node — the tool allow-list is a built-in
-axiom, checked at the call site, fail-closed.
+permits the tools declared on the node — the tool allow-list is checked at
+the call site, fail-closed.
 """
 from __future__ import annotations
 
@@ -15,11 +15,9 @@ import inspect
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
-from ..core.axiom import AxiomViolation
 
 
 class ToolInvocation(BaseModel):
@@ -42,6 +40,7 @@ class RegisteredTool:
     args_model: type[BaseModel]
     handler: Callable[[BaseModel], Any]
     json_schema: dict[str, Any]
+    return_schema: dict[str, Any] | None = None
 
 
 @dataclass
@@ -97,8 +96,8 @@ class ToolRegistry:
 DEFAULT_REGISTRY = ToolRegistry()
 
 
-class ToolNotAllowedError(AxiomViolation):
-    """The built-in tool allow-list axiom: tool not permitted on this node."""
+class ToolNotAllowedError(PermissionError):
+    """Tool not permitted on this node (allow-list fail-closed)."""
 
 
 @dataclass
@@ -129,8 +128,7 @@ class BoundTools:
         """
         if name not in self.allowed:
             raise ToolNotAllowedError(
-                f"Tool '{name}' is not allowed on node '{self.node_id}'.",
-                axiom="ToolAllowList",
+                f"Tool '{name}' is not allowed on node '{self.node_id}'."
             )
         payload = (
             arguments.model_dump() if isinstance(arguments, BaseModel) else dict(arguments)
@@ -146,6 +144,46 @@ class BoundTools:
 
 def _is_model(candidate: Any) -> bool:
     return isinstance(candidate, type) and issubclass(candidate, BaseModel)
+
+
+def _return_schema(
+    func: Callable[..., Any],
+    *,
+    localns: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Best-effort JSON Schema for a tool's return value."""
+    try:
+        hints = get_type_hints(func, localns=localns, include_extras=True)
+    except Exception:
+        hints = {}
+    annotation = hints.get("return", inspect.signature(func).return_annotation)
+    if annotation is inspect.Signature.empty or annotation is None:
+        return None
+    if _is_model(annotation):
+        schema = annotation.model_json_schema()
+        schema.setdefault("type", "object")
+        schema.setdefault("additionalProperties", False)
+        return schema
+    origin = get_origin(annotation) or annotation
+    if origin is dict:
+        args = get_args(annotation)
+        value = args[1] if len(args) == 2 else Any
+        if _is_model(value):
+            return {
+                "type": "object",
+                "additionalProperties": value.model_json_schema(),
+            }
+        return {"type": "object"}
+    if origin is list:
+        args = get_args(annotation)
+        item = args[0] if args else Any
+        if _is_model(item):
+            return {"type": "array", "items": item.model_json_schema()}
+        return {"type": "array"}
+    if annotation in {str, int, float, bool}:
+        return {"type": {str: "string", int: "integer", float: "number", bool: "boolean"}[annotation]}
+    name = getattr(annotation, "__name__", None) or str(annotation)
+    return {"type": name}
 
 
 def _resolve_args_model(
@@ -232,6 +270,7 @@ def tool(
             args_model=model,
             handler=handler,
             json_schema=json_schema,
+            return_schema=_return_schema(fn, localns=caller_locals),
         )
         target.register(registered)
 

@@ -9,7 +9,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .core.context import RunContext
-from .core.graph import Graph
 from .core.models import Candidate, RoutingPlan
 
 
@@ -79,18 +78,19 @@ class BackendClient:
         request_id: str,
         initial_state: str,
         manifest: dict[str, Any],
+        input: Any = None,
     ) -> str | None:
-        response = await self._telemetry_post(
-            "/telemetry/runs",
-            {
-                "external_id": request_id,
-                "name": "control-cycle",
-                "metadata": {
-                    "initial_state": initial_state,
-                    "graph": manifest,
-                },
+        payload: dict[str, Any] = {
+            "external_id": request_id,
+            "name": "control-cycle",
+            "metadata": {
+                "initial_state": initial_state,
+                "graph": manifest,
             },
-        )
+        }
+        if input is not None:
+            payload["input"] = input
+        response = await self._telemetry_post("/telemetry/runs", payload)
         if response is None:
             return None
         run_id = response.get("id", response.get("run_id"))
@@ -116,7 +116,12 @@ class BackendClient:
         )
 
     async def telemetry_run_finished(
-        self, run_id: str, *, status: str, final_state: str
+        self,
+        run_id: str,
+        *,
+        status: str,
+        final_state: str,
+        output: dict[str, Any] | None = None,
     ) -> None:
         wire_status = {
             "completed": "succeeded",
@@ -127,7 +132,10 @@ class BackendClient:
         }.get(status, "failed")
         await self._telemetry_post(
             f"/telemetry/runs/{run_id}/finish",
-            {"status": wire_status, "output": {"final_state": final_state}},
+            {
+                "status": wire_status,
+                "output": {"final_state": final_state, **(output or {})},
+            },
         )
 
     async def _telemetry_post(
@@ -146,15 +154,27 @@ class BackendClient:
 
     async def generate(
         self,
-        prompt: str,
+        prompt: str | None = None,
         *,
         schema: dict[str, Any] | None = None,
         purpose: str = "node",
+        node: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> str:
-        response = await self.post(
-            "/framework/slm",
-            {"purpose": purpose, "prompt": prompt, "schema": schema},
-        )
+        """Generate text. Prefer ``node`` + ``context`` so the backend builds the prompt."""
+        payload: dict[str, Any] = {"purpose": purpose, "schema": schema}
+        if node is not None:
+            payload["node"] = node
+            if context is not None:
+                payload["context"] = context
+            if tools is not None:
+                payload["tools"] = tools
+        elif prompt:
+            payload["prompt"] = prompt
+        else:
+            raise BackendError("generate requires prompt or node declaration")
+        response = await self.post("/framework/slm", payload)
         text = response.get("text")
         if not isinstance(text, str):
             raise BackendError("backend SLM response has no text")
@@ -213,53 +233,6 @@ class BackendClient:
             return RoutingPlan.model_validate(response)
         except ValueError as exc:
             raise BackendError(f"backend returned an invalid routing plan: {exc}") from exc
-
-    async def select(
-        self,
-        context: RunContext,
-        graph: Graph,
-        *,
-        limit: int = 10,
-    ) -> list[Candidate]:
-        """Legacy direct selector call. Prefer :meth:`start_control_run`."""
-        nodes = [
-            {
-                "node_id": node.id,
-                "name": node.name,
-                "description": node.description,
-                "prerequisites": list(node.prerequisites),
-                "is_fallback": node.is_fallback,
-                "metadata": {
-                    **node.metadata,
-                    **({"group": node.group} if node.group else {}),
-                },
-            }
-            for node in graph.nodes.values()
-        ]
-        response = await self.post(
-            "/framework/semantic-node-hybrid",
-            {
-                "context": _wire_context(context),
-                "nodes": nodes,
-                "limit": limit,
-            },
-        )
-        raw_candidates = response.get("candidates")
-        if not isinstance(raw_candidates, list):
-            raise BackendError("backend semantic-node response has no candidates")
-        try:
-            candidates = [
-                Candidate.model_validate(candidate) for candidate in raw_candidates
-            ]
-        except ValueError as exc:
-            raise BackendError(
-                f"backend returned invalid semantic-node candidates: {exc}"
-            ) from exc
-        if sum(candidate.is_fallback for candidate in candidates) != 1:
-            raise BackendError(
-                "backend semantic-node response requires exactly one fallback"
-            )
-        return candidates
 
     def _post(
         self,
@@ -320,32 +293,41 @@ class BackendProvider:
         self.purpose = purpose
 
     async def generate(
-        self, prompt: str, *, schema: dict[str, Any] | None = None
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        node: Any = None,
+        context: Any = None,
+        tools: Any = None,
     ) -> str:
-        return await self.client.generate(
-            prompt, schema=schema, purpose=self.purpose
-        )
+        kwargs: dict[str, Any] = {"schema": schema, "purpose": self.purpose}
+        if node is not None:
+            kwargs["node"] = _wire_node_declaration(node)
+            if context is not None:
+                kwargs["context"] = _wire_context(context)
+            if tools is not None:
+                kwargs["tools"] = _wire_tool_catalog(tools)
+            return await self.client.generate(None, **kwargs)
+        return await self.client.generate(prompt, **kwargs)
 
 
-class BackendRouter:
-    def __init__(self, client: BackendClient, *, category: str = "general") -> None:
-        self.client = client
-        self.category = category
+def _wire_node_declaration(node: Any) -> dict[str, Any]:
+    return {
+        "id": getattr(node, "id", ""),
+        "name": getattr(node, "name", "") or "",
+        "description": getattr(node, "description", "") or "",
+        "prompt": getattr(node, "prompt", "") or "",
+        "mode": getattr(node, "mode", None),
+        "tools": list(getattr(node, "tools", ()) or ()),
+        "input_schema": getattr(node, "input_schema", None),
+        "output_schema": getattr(node, "output_schema", None),
+    }
 
-    async def route(
-        self, context: RunContext, candidates: list[Candidate]
-    ) -> RoutingPlan:
-        return await self.client.route(
-            context, candidates, category=self.category
-        )
 
-
-class BackendCandidateSelector:
-    def __init__(self, client: BackendClient, *, limit: int = 10) -> None:
-        if not 2 <= limit <= 10:
-            raise ValueError("candidate limit must be between 2 and 10")
-        self.client = client
-        self.limit = limit
-
-    async def select(self, context: RunContext, graph: Graph) -> list[Candidate]:
-        return await self.client.select(context, graph, limit=self.limit)
+def _wire_tool_catalog(tools: Any) -> list[dict[str, Any]]:
+    specs = tools.specs() if hasattr(tools, "specs") else ()
+    return [
+        {"name": spec.name, "description": spec.description or ""}
+        for spec in specs
+    ]

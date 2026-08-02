@@ -21,9 +21,9 @@ class RuntimeModel(BaseModel):
 class Topology(str, Enum):
     """How planned steps may group nodes.
 
-    ``HYBRID`` exists for validator compatibility; trained SLM routers encode
-    hybrid plans as ``sequential`` with parallel inner steps (stable wire
-    format), and the SLM adapter maps that shape to ``HYBRID`` internally.
+    ``HYBRID`` exists for validator compatibility; the trained semantic router
+    encodes hybrid plans as ``sequential`` with parallel inner steps (stable
+    wire format), and the backend maps that shape to ``HYBRID``.
     """
 
     PARALLEL = "parallel"
@@ -132,8 +132,8 @@ class ExecutionStepResult(RuntimeModel):
     results: list[NodeResult]
 
 
-class AxiomCheck(RuntimeModel):
-    """Audit record of one gate evaluation (axiom, validator, or built-in)."""
+class GateCheck(RuntimeModel):
+    """Audit record of one gate evaluation (validator, guard, or built-in)."""
 
     name: str
     stage: Literal["plan", "result"]
@@ -151,7 +151,7 @@ class AuditRecord(RuntimeModel):
     final_state: str
     plan: RoutingPlan | None = None
     candidates: list[Candidate] = Field(default_factory=list)
-    axiom_checks: list[AxiomCheck] = Field(default_factory=list)
+    gate_checks: list[GateCheck] = Field(default_factory=list)
     steps: list[ExecutionStepResult] = Field(default_factory=list)
     committed_transitions: list[str] = Field(default_factory=list)
     rejected: bool = False
@@ -162,7 +162,7 @@ class AuditRecord(RuntimeModel):
 class RunResult(RuntimeModel):
     """Outcome of one control cycle.
 
-    A rejection (illegal plan, broken axiom, illegal transition) is a normal,
+    A rejection (illegal plan, illegal transition, failed guard) is a normal,
     non-exceptional outcome: ``rejected=True``, no state change was committed
     for the offending step, and the audit record explains why.
 

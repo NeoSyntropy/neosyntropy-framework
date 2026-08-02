@@ -10,17 +10,17 @@ enforces.
 Agent frameworks are black boxes: decisions emerge from prompts, the action
 space is unbounded, and compliance becomes forensics after the fact.
 NeoSyntropy inverts this. You decompose business logic into **states, edges,
-axioms, and executable nodes**, and the engine enforces that map on every
+and executable nodes**, and the engine enforces that map on every
 cycle. Invalid transitions are rejected before side effects; compliance holds
 by construction because every accepted step is a logged state change.
 
 Determinism here is architectural, not `temperature=0`. Explicit graphs,
-transition tables, plan validation, and axiom gates constrain what AI may
+transition tables, plan validation, and edge/transition gates constrain what AI may
 choose *before* anything executes. Routing by a model is allowed — but only
 inside a machine-checkable plan over a precompiled graph. Determinism is
 bounded nondeterminism under gates, not "same tokens every time".
 
-## The five primitives
+## The primitives
 
 ### Node — executable capability
 
@@ -35,7 +35,7 @@ anything.
 
 Tools are capabilities *on* a node (`tools=("lookup_order",)`), never graph
 vertices. Handlers reach tools through a bound facade that enforces the
-allow-list fail-closed: calling an undeclared tool is an axiom violation, not
+allow-list fail-closed: calling an undeclared tool is denied fail-closed, not
 an error to retry around.
 
 Provider-backed nodes that declare tools run a split reasoning/extraction
@@ -54,8 +54,7 @@ Here too, proposal is not permission: a model asking for a tool the node does
 not declare is denied and told so, and the tool never executes. Deterministic
 code calling an undeclared tool is a different thing — a programming error —
 and rejects the cycle outright. Every attempt (denied, failed, or successful)
-is recorded in `NodeResult.tool_calls`, so axioms can gate on tool usage and
-the audit trail stays complete.
+is recorded in `NodeResult.tool_calls`, so the audit trail stays complete.
 
 ### Edge — one permitted movement
 
@@ -70,24 +69,6 @@ that drives the deterministic preferred-path router, and optional **guards**:
 callables over the state that gate the edge at runtime. Guards fail closed —
 a guard that raises denies the transition.
 
-### Axiom — an invariant that cannot be broken
-
-Axioms are the business rules the AI can never violate: margin floors,
-compensation caps, verification requirements, output schemas. They are
-evaluated at two points in every cycle:
-
-1. **Plan stage** — before execution, over the proposed plan.
-2. **Result stage** — before commit, over each node result and a *preview* of
-   the state the workflow would have if the step were accepted.
-
-A failed axiom rejects the step: no side-effecting commit, and the violation
-is recorded in the audit trail. A broken axiom is never a billable
-transition. Predicate exceptions count as violations — the engine never
-fails open.
-
-Built-in gates run as axioms too: plan validation, transition legality at
-commit time, edge guards, tool allow-lists, and JSON-schema output checks
-(`OutputAxiom`).
 
 ### Group — organization, not control
 
@@ -99,15 +80,15 @@ create a second control path — one pipeline owns the sequence end to end.
 
 ```text
 input -> candidate selection -> router proposal -> plan validation
-      -> plan axioms -> execution -> result axioms -> one state commit
+      -> execution -> guards / transition checks -> one state commit
       -> audit record
 ```
 
 Rules the manager guarantees:
 
 - **Proposal is not permission.** The router (deterministic or SLM) only
-  proposes `{reasoning, topology, execution_plan}`. The validator, the axiom
-  engine, and the transition table decide.
+  proposes `{reasoning, topology, execution_plan}`. The validator and the
+  transition table decide.
 - **Exactly one current state** per workflow instance; at most one state
   commit per plan step, applied atomically. Parallel nodes may not propose
   conflicting next states or conflicting values for the same key.
@@ -120,7 +101,7 @@ Rules the manager guarantees:
   `refund.requested` does not approve a refund; adapters normalize and
   authenticate, they never choose nodes or mutate state.
 - **Auditability by construction.** Every cycle emits an `AuditRecord` (plan,
-  candidates, axiom checks, committed transitions, rejection reason), so a
+  candidates, gate checks, committed transitions, rejection reason), so a
   review checks a graph path, not a transcript.
 
 ## The SLM wire contracts
@@ -143,8 +124,8 @@ The framework preserves the trained model contracts as stable wire formats:
 ## Economics
 
 The billable and auditable unit is the **successful state transition** — a
-verified state change that passed every gate. Failed plans, broken axioms,
-and hallucinated loops never count as successful transitions. Because each
+verified state change that passed every gate. Failed plans, rejected
+transitions, and hallucinated loops never count as successful transitions. Because each
 node runs with a small, scoped prompt inside its own step (no mega-prompts),
 cheap small language models can do the work, and the control layer — not the
 model — carries the guarantees.

@@ -7,6 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from neosyntropy import (
+    OpenInput,
     BoundTools,
     ControlManager,
     Edge,
@@ -233,6 +234,8 @@ def test_provider_extractor_raises_on_garbage(registry):
 
 
 def _graph_with_tool_node() -> Graph:
+    from neosyntropy import TextOutput
+
     return Graph(
         nodes=[
             Node(
@@ -241,12 +244,13 @@ def _graph_with_tool_node() -> Graph:
                 provider="slm",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
+                input_schema=OpenInput, output_schema=TextOutput,
             ),
-            Node(id="OutOfScope", is_fallback=True),
+            Node(id="OutOfScope", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput),
         ],
         edges=[
-            Edge(source="Start", target="Support", label="first"),
-            Edge(source="Support", target="End", label="complete"),
+            Edge(source="Start", target="Support", kind="deterministic"),
+            Edge(source="Support", target="End", kind="deterministic"),
         ],
     )
 
@@ -257,6 +261,7 @@ def test_provider_backed_node_calls_tools_end_to_end(registry):
             "Let me look that up. <TOOL:lookup_order>",
             '{"order_id": "ord_9", "include_history": false}',
             "Your order totals 42.0.",
+            '{"message": "Your order totals 42.0."}',
         ]
     )
     manager = ControlManager(
@@ -269,48 +274,20 @@ def test_provider_backed_node_calls_tools_end_to_end(registry):
     node_result = result.steps[0].results[0]
     assert node_result.tool_calls[0].ok
     assert node_result.tool_calls[0].result == {"order_id": "ord_9", "amount": 42.0}
-    assert "42.0" in (node_result.output or "")
+    assert "42.0" in str(node_result.output)
 
 
-def test_node_prompt_lists_only_that_nodes_tools(registry):
-    provider = ScriptedProvider(["No tools needed."])
+def test_framework_seeds_provider_with_declared_prompt_only(registry):
+    """Prompt assembly (tools catalog, evidence, state) is backend-owned."""
+    provider = ScriptedProvider(
+        ["No tools needed.", '{"message": "No tools needed."}']
+    )
     manager = ControlManager(
         _graph_with_tool_node(), providers={"slm": provider}, tools=registry
     )
     manager.run(RunRequest(intent="hello"))
     prompt = provider.prompts[0]
     assert "Help the customer with their order." in prompt
-    assert "- lookup_order: Look up an order by id." in prompt
-    assert "<TOOL:tool_name>" in prompt
-
-
-def test_axiom_can_reject_a_cycle_on_tool_usage(registry):
-    from neosyntropy import axiom
-
-    @axiom(name="NoFailedTools", error_message="a tool call failed")
-    def no_failed_tools(ctx, proposal):
-        if proposal.result is None:
-            return True
-        return all(record.ok for record in proposal.result.tool_calls)
-
-    provider = ScriptedProvider(
-        [
-            "<TOOL:lookup_order>",
-            '{"order_id": "boom", "include_history": false}',
-            "Something went wrong.",
-        ]
-    )
-    graph = Graph(
-        nodes=list(_graph_with_tool_node().nodes.values()),
-        edges=[
-            Edge(source="Start", target="Support", label="first"),
-            Edge(source="Support", target="End", label="complete"),
-        ],
-        axioms=[no_failed_tools],
-    )
-    manager = ControlManager(graph, providers={"slm": provider}, tools=registry)
-    result = manager.run(RunRequest(intent="where is order boom?"))
-
-    assert result.rejected
-    assert "a tool call failed" in (result.rejection or "")
-    assert result.final_state == "Start"
+    assert "Available tools:" not in prompt
+    assert "Prior node findings" not in prompt
+    assert "User Intent:" not in prompt

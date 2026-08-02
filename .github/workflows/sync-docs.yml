@@ -1,0 +1,63 @@
+name: Sync docs to frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/site/**"
+      - ".github/workflows/sync-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check sync token
+        id: gate
+        env:
+          DOCS_SYNC_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$DOCS_SYNC_TOKEN" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "DOCS_SYNC_TOKEN is not set; skipping frontend sync."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout framework
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Checkout frontend
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FRONTEND_REPO || 'aharrar/neo_syntropy_frontend' }}
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          path: frontend
+
+      - name: Copy canonical docs
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          mkdir -p frontend/app/content
+          cp docs/site/framework-docs.json frontend/app/content/framework-docs.json
+
+      - name: Open sync PR
+        if: steps.gate.outputs.skip != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          path: frontend
+          commit-message: "docs: sync framework product docs"
+          branch: sync/framework-docs
+          delete-branch: true
+          title: "docs: sync framework product docs"
+          body: |
+            Automated sync from [`neosyntropy-framework`](https://github.com/NeoSyntropy/neosyntropy-framework) `docs/site/framework-docs.json`.
+
+            Source commit: `${{ github.sha }}`
+          add-paths: |
+            app/content/framework-docs.json

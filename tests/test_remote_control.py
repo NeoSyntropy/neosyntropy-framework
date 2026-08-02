@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from neosyntropy import ControlManager, Topology
 
 from .conftest import build_graph
@@ -70,22 +68,19 @@ class FakeControlBackend:
     async def route(self, *args, **kwargs):
         raise AssertionError("control path must not call legacy route")
 
-    async def select(self, *args, **kwargs):
-        raise AssertionError("control path must not call legacy select")
-
 
 class RecordingObserver:
     def __init__(self) -> None:
         self.events: list[str] = []
 
-    async def run_started(self, *, request_id, initial_state, manifest):
+    async def run_started(self, *, request_id, initial_state, manifest, input=None):
         self.events.append("run_started")
         return "observed-run-1"
 
     async def event(self, run_id, event_type, payload):
         self.events.append(event_type)
 
-    async def run_finished(self, run_id, *, status, final_state):
+    async def run_finished(self, run_id, *, status, final_state, output=None):
         self.events.append(f"run_finished:{status}:{final_state}")
 
 

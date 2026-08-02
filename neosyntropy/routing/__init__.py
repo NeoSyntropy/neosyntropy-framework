@@ -1,1 +1,1 @@
-"""Routers: deterministic preferred-path and SLM adapters. Routers propose."""
+"""Routers: deterministic preferred-path and semantic (backend) adapters. Routers propose."""

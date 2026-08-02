@@ -18,13 +18,14 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from neosyntropy import (
+    OpenInput,
     ControlManager,
     Edge,
     Graph,
     Node,
     RunRequest,
+    TextOutput,
     ToolRegistry,
-    axiom,
     tool,
 )
 
@@ -81,23 +82,15 @@ def build_graph() -> Graph:
                 provider="slm",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
+                input_schema=OpenInput, output_schema=TextOutput,
             ),
-            Node(id="OutOfScope", is_fallback=True),
+            Node(id="OutOfScope", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput),
         ],
         edges=[
-            Edge(source="Start", target="Support", label="first"),
-            Edge(source="Support", target="End", label="complete"),
+            Edge(source="Start", target="Support", kind="deterministic"),
+            Edge(source="Support", target="End", kind="deterministic"),
         ],
-        axioms=[no_failed_tools],
     )
-
-
-@axiom(name="NoFailedTools", error_message="A tool call failed; not committing.")
-def no_failed_tools(ctx, proposal):
-    """Tool failures are a state-machine concern, not just a model concern."""
-    if proposal.result is None:
-        return True
-    return all(record.ok for record in proposal.result.tool_calls)
 
 
 def show(title: str, result) -> None:
@@ -142,7 +135,7 @@ def main() -> None:
     )
 
     # The extractor's output does not fit LookupOrderArgs, so the tool is
-    # never reached and the axiom refuses to commit the cycle.
+    # never reached and the model is told why.
     run(
         "Invalid arguments: tool never reached",
         [

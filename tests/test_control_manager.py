@@ -7,8 +7,8 @@ from neosyntropy import (
     Edge,
     Graph,
     JsonlDecisionLogger,
+    OpenInput,
     RunRequest,
-    axiom,
     node,
 )
 
@@ -29,7 +29,7 @@ def test_legal_cycle_commits_exactly_one_transition(refund_graph):
     assert result.final_state == "VerifyIdentity"
     assert result.state["verified"] is True
     assert result.audit.committed_transitions == ["Start->VerifyIdentity"]
-    assert all(check.passed for check in result.audit.axiom_checks)
+    assert all(check.passed for check in result.audit.gate_checks)
 
 
 def test_full_walk_across_cycles(refund_graph):
@@ -51,43 +51,36 @@ def test_full_walk_across_cycles(refund_graph):
     assert state["refund_issued"] is True
 
 
-def test_broken_axiom_rejects_step_with_no_state_change():
-    @axiom(name="MaxRefund", error_message="refund exceeds cap")
-    def max_refund(ctx, proposal):
-        return proposal.state.get("refund_amount", 0.0) <= 200.0
 
-    graph = build_graph(axioms=[max_refund])
-    manager = ControlManager(graph)
-    result = manager.run(
-        make_request(
-            current_state="VerifyIdentity",
-            state={"verified": True, "requested_amount": 900.0},
-            prior_executions=[{"node_id": "VerifyIdentity", "status": "succeeded"}],
-        )
-    )
-    assert result.rejected
-    assert "refund exceeds cap" in (result.rejection or "")
-    # Nothing committed: still in VerifyIdentity, no refund_amount in state.
-    assert result.final_state == "VerifyIdentity"
-    assert "refund_amount" not in result.state
-    assert result.audit.committed_transitions == []
-    failed = [c for c in result.audit.axiom_checks if not c.passed]
-    assert failed and failed[0].name == "MaxRefund"
-
-
-def test_illegal_plan_is_rejected_before_execution(refund_graph):
+def test_illegal_plan_is_rejected_before_execution():
     class JumpRouter:
         async def route(self, context, candidates):
             from neosyntropy import RoutingPlan, Topology
 
-            issue = next(
-                i for i, c in enumerate(candidates) if c.node_id == "IssueRefund"
+            # Propose CalculateRefund before VerifyIdentity — permitted by the
+            # semantic edge but blocked by prerequisites.
+            calc = next(
+                i for i, c in enumerate(candidates) if c.node_id == "CalculateRefund"
             )
             return RoutingPlan(
-                topology=Topology.SEQUENTIAL, execution_plan=[[issue]]
+                topology=Topology.SEQUENTIAL, execution_plan=[[calc]]
             )
 
-    manager = ControlManager(refund_graph, router=JumpRouter())
+    # Semantic scope from Start so the (misbehaving) router is consulted;
+    # deterministic short-circuit would otherwise skip it.
+    base = build_graph()
+    graph = Graph(
+        nodes=list(base.nodes.values()),
+        edges=[
+            Edge(source="Start", target="VerifyIdentity", kind="semantic"),
+            Edge(source="Start", target="CalculateRefund", kind="semantic"),
+            Edge(source="VerifyIdentity", target="CalculateRefund", kind="deterministic"),
+            Edge(source="CalculateRefund", target="IssueRefund", kind="deterministic"),
+            Edge(source="IssueRefund", target="End", kind="deterministic"),
+            Edge(source="Start", target="OutOfScope", kind="fallback"),
+        ],
+    )
+    manager = ControlManager(graph, router=JumpRouter())
     result = manager.run(make_request())
     assert result.rejected
     assert "invalid routing plan" in (result.rejection or "")
@@ -105,18 +98,143 @@ def test_fallback_cycle_is_a_safe_stop(refund_graph):
     assert result.audit.committed_transitions == []
 
 
-def test_handler_proposed_illegal_transition_is_rejected():
-    @node(id="Rogue")
-    def rogue(ctx):
-        return ctx.result(next_state="SomewhereIllegal", state_updates={"x": 1})
+def _entry_guarded_graph() -> Graph:
+    from pydantic import BaseModel, ConfigDict
 
-    @node(id="Safe", is_fallback=True)
+    class RefundInput(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        requested_amount: float
+        currency: str = "USD"
+
+    return build_graph(input_schema=RefundInput)
+
+
+def test_entry_input_is_gated_before_anything_runs():
+    manager = ControlManager(_entry_guarded_graph())
+    result = manager.run(make_request(state={"currency": "USD"}))
+
+    assert result.rejected
+    assert "input schema" in (result.rejection or "")
+    # Rejected at the door: no plan, no candidates, no steps, no commit.
+    assert result.plan is None
+    assert result.candidates == []
+    assert result.steps == []
+    assert result.final_state == "Start"
+    assert result.audit.committed_transitions == []
+    assert [check.name for check in result.audit.gate_checks] == ["InputSchema"]
+
+
+def test_valid_entry_input_runs_normally():
+    manager = ControlManager(_entry_guarded_graph())
+    result = manager.run(make_request(state={"requested_amount": 80.0}))
+
+    assert not result.rejected, result.rejection
+    assert result.final_state == "VerifyIdentity"
+    assert [check.name for check in result.audit.gate_checks][0] == "InputSchema"
+
+
+def test_entry_contract_only_gates_the_entry_point():
+    """Resuming mid-workflow carries state the workflow itself produced."""
+    manager = ControlManager(_entry_guarded_graph())
+    result = manager.run(
+        make_request(
+            current_state="VerifyIdentity",
+            state={"verified": True, "requested_amount": 80.0},
+            prior_executions=[{"node_id": "VerifyIdentity", "status": "succeeded"}],
+        )
+    )
+
+    assert not result.rejected, result.rejection
+    assert "InputSchema" not in [check.name for check in result.audit.gate_checks]
+
+
+def test_node_input_schema_rejects_before_execution():
+    from pydantic import BaseModel, ConfigDict
+
+    from neosyntropy import EmptyOutput, OpenInput, TextOutput
+
+    class NeedsVerified(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        verified: bool
+
+    @node(id="NeedsState", input_schema=NeedsVerified, output_schema=EmptyOutput)
+    def needs_state(ctx):
+        return ctx.result(output={}, state_updates={"ran": True})
+
+    @node(id="Safe", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
     def safe(ctx):
-        return ctx.result(output="stop")
+        return ctx.result(output={"message": "stop"})
+
+    graph = Graph(
+        nodes=[needs_state, safe],
+        edges=[Edge(source="Start", target="NeedsState", kind="deterministic")],
+        validate_reachability=False,
+    )
+    result = ControlManager(graph).run(make_request(intent="go", state={}))
+
+    assert result.rejected
+    assert "input_schema" in (result.rejection or "")
+    assert result.final_state == "Start"
+    assert "ran" not in result.state
+    failed = [c for c in result.audit.gate_checks if not c.passed]
+    assert failed and failed[0].name == "NodeInputSchema"
+
+
+def test_node_input_schema_allows_matching_state():
+    from pydantic import BaseModel, ConfigDict
+
+    from neosyntropy import EmptyOutput, OpenInput, TextOutput
+
+    class NeedsVerified(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        verified: bool
+
+    @node(id="NeedsState", input_schema=NeedsVerified, output_schema=EmptyOutput)
+    def needs_state(ctx):
+        return ctx.result(output={}, state_updates={"ran": True})
+
+    @node(id="Safe", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
+    def safe(ctx):
+        return ctx.result(output={"message": "stop"})
+
+    graph = Graph(
+        nodes=[needs_state, safe],
+        edges=[Edge(source="Start", target="NeedsState", kind="deterministic")],
+        validate_reachability=False,
+    )
+    result = ControlManager(graph).run(
+        make_request(intent="go", state={"verified": True})
+    )
+
+    assert not result.rejected, result.rejection
+    assert result.state["ran"] is True
+    assert any(
+        check.name == "NodeInputSchema" and check.passed
+        for check in result.audit.gate_checks
+    )
+
+
+def test_handler_proposed_illegal_transition_is_rejected():
+    from neosyntropy import EmptyOutput, OpenInput, TextOutput
+
+    @node(id="Rogue", input_schema=OpenInput, output_schema=EmptyOutput)
+    def rogue(ctx):
+        return ctx.result(
+            output={},
+            next_state="SomewhereIllegal",
+            state_updates={"x": 1},
+        )
+
+    @node(id="Safe", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
+    def safe(ctx):
+        return ctx.result(output={"message": "stop"})
 
     graph = Graph(
         nodes=[rogue, safe],
-        edges=[Edge(source="Start", target="Rogue", label="first")],
+        edges=[Edge(source="Start", target="Rogue", kind="deterministic")],
         validate_reachability=False,
     )
     manager = ControlManager(graph)
@@ -127,23 +245,30 @@ def test_handler_proposed_illegal_transition_is_rejected():
     assert result.state == {}
 
 
-def _guarded_graph() -> Graph:
+def _guarded_graph(*, with_semantic: bool = False) -> Graph:
     graph = build_graph()
     # Rebuild with a guard that requires a positive refund amount.
-    return Graph(
-        nodes=list(graph.nodes.values()),
-        edges=[
-            Edge(source="Start", target="VerifyIdentity", label="first"),
-            Edge(source="VerifyIdentity", target="CalculateRefund", label="next"),
+    edges = [
+        Edge(source="Start", target="VerifyIdentity", kind="deterministic"),
+        Edge(source="VerifyIdentity", target="CalculateRefund", kind="deterministic"),
+        Edge(
+            source="CalculateRefund",
+            target="IssueRefund",
+            kind="deterministic",
+            guard=lambda state: state.get("refund_amount", 0.0) > 0.0,
+        ),
+        Edge(source="IssueRefund", target="End", kind="deterministic"),
+        Edge(source="CalculateRefund", target="OutOfScope", kind="fallback"),
+    ]
+    if with_semantic:
+        edges.append(
             Edge(
                 source="CalculateRefund",
                 target="IssueRefund",
-                label="next",
-                guard=lambda state: state.get("refund_amount", 0.0) > 0.0,
-            ),
-            Edge(source="IssueRefund", target="End", label="complete"),
-        ],
-    )
+                kind="semantic",
+            )
+        )
+    return Graph(nodes=list(graph.nodes.values()), edges=edges)
 
 
 def _zero_refund_request():
@@ -170,7 +295,9 @@ def test_edge_guard_denies_forced_plan_before_execution():
             )
             return RoutingPlan(topology=Topology.SEQUENTIAL, execution_plan=[[issue]])
 
-    manager = ControlManager(_guarded_graph(), router=ForcedRouter())
+    manager = ControlManager(
+        _guarded_graph(with_semantic=True), router=ForcedRouter()
+    )
     result = manager.run(_zero_refund_request())
     assert result.rejected
     assert "edge guard denied" in (result.rejection or "")
@@ -188,17 +315,19 @@ def test_deterministic_router_honors_guards_and_falls_back():
 
 
 def test_tool_allow_list_violation_is_a_rejection():
-    @node(id="Sneaky", tools=())
+    from neosyntropy import EmptyOutput, OpenInput, TextOutput
+
+    @node(id="Sneaky", tools=(), input_schema=OpenInput, output_schema=EmptyOutput)
     def sneaky(ctx):
         return ctx.tools.invoke("not_registered", {})
 
-    @node(id="Safe", is_fallback=True)
+    @node(id="Safe", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
     def safe(ctx):
-        return ctx.result(output="stop")
+        return ctx.result(output={"message": "stop"})
 
     graph = Graph(
         nodes=[sneaky, safe],
-        edges=[Edge(source="Start", target="Sneaky", label="first")],
+        edges=[Edge(source="Start", target="Sneaky", kind="deterministic")],
         validate_reachability=False,
     )
     manager = ControlManager(graph)
@@ -231,5 +360,5 @@ def test_audit_record_tells_the_whole_story(refund_graph):
     assert audit.initial_state == "Start"
     assert audit.final_state == "VerifyIdentity"
     assert audit.plan == result.plan
-    assert any(check.name == "PlanValidator" for check in audit.axiom_checks)
-    assert any(check.name == "TransitionLegality" for check in audit.axiom_checks)
+    assert any(check.name == "PlanValidator" for check in audit.gate_checks)
+    assert any(check.name == "TransitionLegality" for check in audit.gate_checks)

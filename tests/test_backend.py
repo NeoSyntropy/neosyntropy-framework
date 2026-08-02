@@ -3,13 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from neosyntropy import (
-    BackendCandidateSelector,
     BackendClient,
     BackendError,
     BackendProvider,
-    BackendRouter,
     Candidate,
     RunContext,
+    SemanticRouter,
     Topology,
 )
 
@@ -20,8 +19,9 @@ class RecordingBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
 
-    async def generate(self, prompt, *, schema=None, purpose="node"):
-        self.calls.append(("generate", {"prompt": prompt, "schema": schema, "purpose": purpose}))
+    async def generate(self, prompt, *, schema=None, purpose="node", **extra):
+        payload = {"prompt": prompt, "schema": schema, "purpose": purpose, **extra}
+        self.calls.append(("generate", payload))
         return "generated"
 
     async def route(self, context, candidates, *, category="general"):
@@ -32,19 +32,6 @@ class RecordingBackend:
             reasoning="backend", topology=Topology.SEQUENTIAL, execution_plan=[[0]]
         )
 
-    async def select(self, context, graph, *, limit=10):
-        self.calls.append(("select", {"limit": limit}))
-        return [
-            Candidate(
-                node_id=node.id,
-                name=node.name,
-                description=node.description,
-                prerequisites=node.prerequisites,
-                is_fallback=node.is_fallback,
-            )
-            for node in graph.nodes.values()
-        ]
-
 
 def test_backend_adapters_do_not_accept_provider_or_model() -> None:
     import asyncio
@@ -52,14 +39,23 @@ def test_backend_adapters_do_not_accept_provider_or_model() -> None:
     client = RecordingBackend()
     context = RunContext(request_id="req-1", intent="refund", current_state="Start")
     graph = build_graph()
+    candidates = [
+        Candidate(
+            node_id=node.id,
+            name=node.name,
+            description=node.description,
+            prerequisites=node.prerequisites,
+            is_fallback=node.is_fallback,
+        )
+        for node in graph.nodes.values()
+    ]
 
-    candidates = asyncio.run(BackendCandidateSelector(client).select(context, graph))
-    plan = asyncio.run(BackendRouter(client).route(context, candidates))
+    plan = asyncio.run(SemanticRouter(client).route(context, candidates))
     generated = asyncio.run(BackendProvider(client).generate("hello", schema={"type": "object"}))
 
     assert plan.execution_plan == [[0]]
     assert generated == "generated"
-    assert [name for name, _ in client.calls] == ["select", "route", "generate"]
+    assert [name for name, _ in client.calls] == ["route", "generate"]
     assert all("provider" not in payload and "model" not in payload for _, payload in client.calls)
 
 

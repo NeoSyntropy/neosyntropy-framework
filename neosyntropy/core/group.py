@@ -1,8 +1,9 @@
-"""Group: a named collection of nodes for organization.
+"""Group: a named collection of nodes.
 
-Groups affect candidate metadata and developer ergonomics only. The plan
-validator and the executor never consult groups — grouping must not create a
-second control path.
+Groups organize nodes and, when targeted by a semantic edge, scope hybrid
+candidate search. The plan validator and executor still decide permission
+from expanded edge targets — groups are not a second control path of their
+own.
 """
 from __future__ import annotations
 

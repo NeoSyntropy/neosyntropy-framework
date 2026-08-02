@@ -3,53 +3,100 @@
 A deterministic control layer for AI workflows. Models propose what should
 happen next; a finite-state graph defines what is allowed to happen.
 
-Five primitives span the problem space:
+Core primitives:
 
 | Primitive | Role |
 |---|---|
 | `Node` | Executable capability (handler or provider-backed), never a workflow position |
-| `Edge` | One permitted movement between states, with labels and fail-closed guards |
-| `Axiom` | An invariant enforced before execution and before commit — a broken axiom is a rejected step |
-| `Group` | Organization for nodes; never a second control path |
-| `ControlManager` | The whole cycle: select → route → validate → gate → execute → gate → commit → audit |
+| `Edge` | One permitted movement: `deterministic`, `semantic`, or `fallback` |
+| `Group` | Organization for nodes; semantic edges may target a group to scope the router |
+| `ControlManager` | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit → audit |
 
 ## Install
 
 ```bash
-pip install -e .          # from this directory
-pip install -e .[dev]     # with pytest + ruff
+pip install neosyntropy
+```
+
+From a local checkout:
+
+```bash
+pip install -e .          # editable install
+pip install -e ".[dev]"   # with pytest + ruff + build tools
+```
+
+### Publish a release to PyPI
+
+Publishing is automated by `.github/workflows/publish.yml` (tests → build → upload).
+
+One-time PyPI setup (Trusted Publishing, no API token):
+
+1. Create a GitHub Environment named `pypi` on this repo (Settings → Environments).
+2. On [PyPI publishing settings](https://pypi.org/manage/account/publishing/), add a **pending publisher**:
+   - Project name: `neosyntropy`
+   - Owner: `NeoSyntropy`
+   - Repository: `neosyntropy-framework`
+   - Workflow: `publish.yml`
+   - Environment name: `pypi`
+
+Then bump `version` in `pyproject.toml`, commit, tag, and push:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Pushing a `v*` tag (or publishing a GitHub Release) runs the workflow and uploads to PyPI.
+
+## CLI login and projects
+
+Installing the package also installs the `neosyntropy` command, while preserving
+the normal Python import API. Connect a terminal through your existing browser
+session, then create or select a project:
+
+```bash
+neosyntropy login
+neosyntropy project create "Support automation" --use
+neosyntropy project list
+```
+
+`login` opens the browser for approval and keeps the refresh credential in the
+operating system keychain. Its configuration file contains only the API URL and
+selected project ID. Use `--api-url` for a self-hosted API and `--profile` for
+separate accounts:
+
+```bash
+neosyntropy --api-url http://localhost:8000 --profile development login
+neosyntropy --profile development project use <project-id>
+neosyntropy logout
 ```
 
 ## Quickstart
 
 ```python
-from neosyntropy import BackendClient, ControlManager, Edge, Graph, axiom, node
+from neosyntropy import BackendClient, ControlManager, Edge, Graph, EmptyOutput, TextOutput, node
 
-@node(id="VerifyIdentity")
+@node(id="VerifyIdentity", output_schema=EmptyOutput)
 def verify_identity(ctx):
     """Verify the requester owns the order."""
-    return ctx.result(state_updates={"verified": True})
+    return ctx.result(output={}, state_updates={"verified": True})
 
-@node(id="IssueRefund", prerequisites=("VerifyIdentity",))
+@node(id="IssueRefund", prerequisites=("VerifyIdentity",), output_schema=EmptyOutput)
 def issue_refund(ctx):
-    return ctx.result(state_updates={"refund_issued": True}, next_state="End")
+    return ctx.result(output={}, state_updates={"refund_issued": True}, next_state="End")
 
-@node(id="OutOfScope", is_fallback=True)
+@node(id="OutOfScope", is_fallback=True, output_schema=TextOutput)
 def out_of_scope(ctx):
-    return ctx.result(output="Out of scope for this workflow.")
-
-@axiom(name="MaxRefund", error_message="Refund exceeds the cap.")
-def max_refund(ctx, proposal):
-    return proposal.state.get("refund_amount", 0) <= 200
+    return ctx.result(output={"message": "Out of scope for this workflow."})
 
 graph = Graph(
     nodes=[verify_identity, issue_refund, out_of_scope],
     edges=[
-        Edge(source="Start", target="VerifyIdentity", label="first"),
-        Edge(source="VerifyIdentity", target="IssueRefund", label="next"),
-        Edge(source="IssueRefund", target="End", label="complete"),
+        Edge(source="Start", target="VerifyIdentity", kind="deterministic"),
+        Edge(source="VerifyIdentity", target="IssueRefund", kind="deterministic"),
+        Edge(source="IssueRefund", target="End", kind="deterministic"),
+        Edge(source="Start", target="OutOfScope", kind="fallback"),
     ],
-    axioms=[max_refund],
 )
 
 backend = BackendClient(
@@ -65,10 +112,35 @@ print(result.audit.committed_transitions)    # ["Start->VerifyIdentity"]
 ```
 
 Every cycle returns a `RunResult` with a full `AuditRecord`: the proposed
-plan, the candidates, every axiom check, and the committed transitions. A
-rejection (illegal plan, broken axiom, illegal transition, failed guard) is a
+plan, the candidates, every gate check, and the committed transitions. A
+rejection (illegal plan, illegal transition, failed guard) is a
 normal outcome — `result.rejected` is set, nothing was committed for the
 offending step, and the audit explains why.
+
+### The entry contract
+
+A node declares what it returns; a graph declares what it takes in.
+`input_schema` documents and enforces the state a run must supply when it
+starts at `Start`:
+
+```python
+class RefundRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str
+    currency: str = "USD"
+
+graph = Graph(nodes=[...], edges=[...], input_schema=RefundRequest)
+```
+
+Fields with defaults stay optional and unknown keys are refused, so no caller
+can smuggle state into the workflow. The check is the first gate of the cycle:
+input the graph never accepted is rejected before selection, routing, or any
+node runs, and the audit records it as an `InputSchema` check. Cycles that
+resume mid-workflow are not re-checked — that state is what the workflow
+itself produced. A pydantic model or a raw JSON Schema object both work, and
+the schema travels in `graph_manifest(graph)` so the console can show what the
+entry point expects.
 
 ## Routing and control
 
@@ -80,15 +152,16 @@ include topology, candidates, execution plans, providers, or model names.
 - **Backend control** (default with credentials): `POST /control/runs` +
   `POST /control/runs/{id}/results`. The SDK loops: receive opaque execute
   steps → run local handlers → submit results → accept commits/rejections.
-- **`DeterministicRouter`** (offline fallback, no backend): walks outgoing
-  edges by label priority; proposes the dedicated fallback when nothing is
-  legal.
+- **`DeterministicRouter`** (offline fallback, no backend): takes exactly one
+  matching deterministic edge, else a unique semantic target, else the
+  fallback edge.
 - Node generation for handler-less nodes may still use `/framework/slm`;
   selection/routing stay behind the control API.
 
 Set `NEOSYNTROPY_API_URL` with `NEOSYNTROPY_API_KEY` + `NEOSYNTROPY_PROJECT_ID`
 (or `NEOSYNTROPY_ACCESS_TOKEN`). `ControlManager(graph)` discovers them
 automatically.
+
 
 ## Observability
 
@@ -104,13 +177,25 @@ changes execution, validation, state commits, returned results, or raised
 execution errors. Events cover plan proposals, step start/completion,
 committed transitions, rejection/failure, and finish.
 
-Only a visualization manifest leaves the process. It contains node IDs,
-display names, groups, fallback markers, and labeled edges. Prompts, handlers,
-guards, tools, providers, descriptions, metadata, axioms, request intent,
-history, state, outputs, and errors are excluded.
+By default the run's debug payloads are captured so the console can replay
+the FSM step by step (and the data can later feed training):
 
-Use `graph_manifest(graph)` to inspect that payload or provide a custom
-`RunObserver` with `ControlManager(graph, observer=...)`. See
+- the run input (intent, initial state, state snapshot, history, metadata),
+- each step's input (`current_state` plus the pre-step state snapshot),
+- each step's output (node results, state updates, the post-step state, and
+  the rejection reason when a gate fails),
+- the run output (final state, final state snapshot, committed transitions).
+
+Oversized step payloads are truncated client-side so events are stored rather
+than dropped. Pass `ControlManager(graph, capture_payloads=False)` for
+sanitized lifecycle-only telemetry: then only a visualization manifest leaves
+the process (graph input schema, node IDs, display names, descriptions,
+prompts, modes, tool allow-list names, output schemas, groups, fallback
+markers, and typed edges) and handlers, guards, providers, metadata,
+request intent, history, state, outputs, and errors are excluded.
+
+Use `graph_manifest(graph)` to inspect the manifest payload or provide a
+custom `RunObserver` with `ControlManager(graph, observer=...)`. See
 [`examples/observability.py`](examples/observability.py).
 
 ## Tools
@@ -160,22 +245,17 @@ Guarantees in this loop: a proposed tool that the node does not declare is
 denied and never executed (the refusal is fed back so the model can recover),
 invalid arguments never reach the tool, duplicate calls are rejected, and the
 loop is bounded by `max_tool_calls`. Every attempt lands in
-`NodeResult.tool_calls`, so an axiom can gate on tool usage:
-
-```python
-@axiom(name="NoFailedTools")
-def no_failed_tools(ctx, proposal):
-    if proposal.result is None:
-        return True
-    return all(record.ok for record in proposal.result.tool_calls)
-```
+`NodeResult.tool_calls`, for a complete audit trail.
 
 ## Example and docs
 
 - [`examples/refund_workflow.py`](examples/refund_workflow.py) — end-to-end
-  workflow with guards, axioms, tools, a rejection, and a fallback.
+  workflow with guards, tools, a rejection, and a fallback.
 - [`docs/concepts.md`](docs/concepts.md) — the distilled methodology: nodes
-  vs states, proposal vs permission, fail-closed axioms, wire contracts.
+  vs states, proposal vs permission, fail-closed gates, wire contracts.
+- [`docs/site/framework-docs.json`](docs/site/framework-docs.json) — canonical
+  website docs (Get started, Core concepts, Control API). CI syncs this file
+  into the frontend repo; see [`docs/site/README.md`](docs/site/README.md).
 
 ## Tests
 

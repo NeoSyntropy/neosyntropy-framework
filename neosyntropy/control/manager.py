@@ -2,16 +2,16 @@
 
 The pipeline the docs describe, end to end::
 
-    input -> candidate selection -> router proposal -> plan validation
-          -> plan axioms -> execution -> result axioms -> one state commit
-          -> audit record
+    input -> deterministic edge | semantic-edge candidates -> router proposal
+          -> plan validation -> execution -> guards / transition checks
+          -> one state commit -> audit record
 
 Rules the manager guarantees:
 
-- Proposal is not permission: the router only proposes; the validator, the
-  axiom engine, and the transition table decide.
-- Fail-closed gates run before commit; a broken axiom or illegal transition
-  rejects the step with no state change ("no billable transition").
+- Proposal is not permission: the router only proposes; the validator and
+  the transition table decide.
+- Fail-closed gates run before commit; an illegal transition or failed
+  guard rejects the step with no state change ("no billable transition").
 - At most one state commit per plan step, applied atomically.
 - Every cycle emits an :class:`AuditRecord` so reviews check a graph path,
   not a transcript.
@@ -24,23 +24,22 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ..backend import (
-    BackendCandidateSelector,
     BackendClient,
     BackendProvider,
-    BackendRouter,
 )
-from ..core.axiom import Axiom, AxiomEngine, AxiomViolation, Proposal
+from ..routing.semantic import SemanticRouter
 from ..core.context import ContextBuilder, RunContext
-from ..core.graph import Graph
+from ..core.graph import START, Graph
 from ..core.models import (
     AuditRecord,
-    AxiomCheck,
     Candidate,
     ExecutionStepResult,
+    GateCheck,
     NodeResult,
     RoutingPlan,
     RunRequest,
     RunResult,
+    Topology,
 )
 from ..core.state import StateConflictError, StateManager
 from ..observability import (
@@ -54,11 +53,13 @@ from ..providers.base import Provider, ProviderRegistry
 from ..routing.base import Router
 from ..routing.deterministic import DeterministicRouter
 from ..tools.calling import ParameterExtractor
-from ..tools.registry import ToolRegistry
+from ..tools.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
 from .logging import DecisionLogger
-from .selector import CandidateSelector, LexicalCandidateSelector
 from .validator import PlanValidationError, PlanValidator
+
+# Trained semantic-router wire contract: 9 actionable slots + fallback.
+_MAX_ACTIONABLE_CANDIDATES = 9
 
 
 class ControlManager:
@@ -70,15 +71,14 @@ class ControlManager:
         router: Router | None = None,
         providers: ProviderRegistry | Mapping[str, Provider] | None = None,
         tools: ToolRegistry | None = None,
-        selector: CandidateSelector | None = None,
         validator: PlanValidator | None = None,
         executor: TopologyExecutor | None = None,
         extractor: ParameterExtractor | None = None,
-        axioms: Iterable[Axiom] = (),
         context_builder: ContextBuilder | None = None,
         decision_logger: DecisionLogger | None = None,
         observer: RunObserver | None = None,
         telemetry_timeout: float = 2.0,
+        capture_payloads: bool = True,
     ):
         self.graph = graph
         resolved_backend = backend if backend is not None else BackendClient.from_env()
@@ -102,23 +102,17 @@ class ControlManager:
                 self.providers.register(name, provider)
         self.tools = tools or ToolRegistry()
         # When a backend is configured, ControlManager uses the opaque
-        # /control/runs API. Local router/selector remain offline fallbacks.
+        # /control/runs API. Local router remains an offline fallback.
         self.router = router or (
-            BackendRouter(resolved_backend)
+            SemanticRouter(resolved_backend)
             if resolved_backend is not None
             else DeterministicRouter(graph)
-        )
-        self.selector = selector or (
-            BackendCandidateSelector(resolved_backend)
-            if resolved_backend is not None
-            else LexicalCandidateSelector()
         )
         self.validator = validator or PlanValidator()
         self.executor = executor or TopologyExecutor(
             self.providers, self.tools, extractor=extractor
         )
         self.context_builder = context_builder or ContextBuilder()
-        self.axiom_engine = AxiomEngine([*graph.axioms, *axioms])
         self.decision_logger = decision_logger
         self.observer = (
             observer
@@ -132,6 +126,11 @@ class ControlManager:
         if telemetry_timeout <= 0:
             raise ValueError("telemetry_timeout must be positive")
         self.telemetry_timeout = telemetry_timeout
+        # When True, telemetry includes the run input plus each step's input
+        # state and node outputs so developers can debug the FSM step by step
+        # (and the data can later feed training). Set False for sanitized
+        # lifecycle-only telemetry.
+        self.capture_payloads = capture_payloads
 
     # -- public API ----------------------------------------------------------
 
@@ -154,12 +153,31 @@ class ControlManager:
         )
         context = self.context_builder.build(typed_request)
         run_id = await self._observation_started(context)
+        entry_check = self._entry_input_check(context)
         try:
-            result = (
-                await self._run_remote_control(context, run_id)
-                if self._backend is not None
-                else await self._run_control_cycle(context, run_id)
-            )
+            if entry_check is not None and not entry_check.passed:
+                # The entry contract is the first gate: nothing is selected,
+                # routed, or executed on input the graph never accepted.
+                result = self._result(
+                    context,
+                    None,
+                    [],
+                    [],
+                    context.current_state,
+                    dict(context.state),
+                    [entry_check],
+                    completed=False,
+                    rejection=entry_check.message,
+                    committed=[],
+                )
+            else:
+                # A satisfied entry gate still belongs in the audit trail.
+                opening = [entry_check] if entry_check is not None else None
+                result = (
+                    await self._run_remote_control(context, run_id, opening)
+                    if self._backend is not None
+                    else await self._run_control_cycle(context, run_id, opening)
+                )
         except Exception as exc:
             await self._observe(
                 run_id, "run_failed", {"error_type": type(exc).__name__}
@@ -177,13 +195,24 @@ class ControlManager:
         else:
             await self._observe(run_id, "run_failed", {})
             status = "failed"
+        output: dict[str, Any] | None = None
+        if self.capture_payloads:
+            output = {
+                "state": dict(result.state),
+                "committed_transitions": list(result.audit.committed_transitions),
+            }
+            if result.rejection:
+                output["rejection"] = result.rejection
         await self._observation_finished(
-            run_id, status=status, final_state=result.final_state
+            run_id, status=status, final_state=result.final_state, output=output
         )
         return result
 
     async def _run_remote_control(
-        self, context: RunContext, observation_run_id: str | None
+        self,
+        context: RunContext,
+        observation_run_id: str | None,
+        initial_checks: list[GateCheck] | None = None,
     ) -> RunResult:
         """Backend owns select/route/validate/commit; client only executes handlers."""
         assert self._backend is not None
@@ -211,31 +240,50 @@ class ControlManager:
             {"mode": "backend_owned"},
         )
         steps: list[ExecutionStepResult] = []
-        checks: list[AxiomCheck] = []
+        checks: list[GateCheck] = list(initial_checks or [])
         observed_transitions = 0
         while view.get("status") == "awaiting_execution":
             step = view.get("step") or {}
             node_ids = list(step.get("nodes") or [])
             step_number = int(step.get("step", len(steps)))
-            step_payload = {"step": step_number, "node_ids": sorted(node_ids)}
-            await self._observe(observation_run_id, "step_started", step_payload)
             step_context = context.model_copy(
                 update={
                     "current_state": view.get("current_state", context.current_state),
                     "state": dict(view.get("state") or {}),
                 }
             )
+            step_payload = self._step_payload(step_number, node_ids, step_context)
+            await self._observe(observation_run_id, "step_started", step_payload)
             guard_check = self._remote_guard_check(node_ids, step_context)
             checks.append(guard_check)
             if not guard_check.passed:
+                rejection = guard_check.message or "edge guard denied"
                 view = await self._backend.submit_control_results(
                     str(view["run_id"]),
-                    client_rejection=guard_check.message or "edge guard denied",
+                    client_rejection=rejection,
                 )
                 await self._observe(
                     observation_run_id,
                     "step_completed",
-                    {**step_payload, "status": "rejected"},
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection
+                    ),
+                )
+                break
+            input_check = self._step_input_check(node_ids, step_context.state)
+            checks.append(input_check)
+            if not input_check.passed:
+                rejection = input_check.message or "node input schema violated"
+                view = await self._backend.submit_control_results(
+                    str(view["run_id"]),
+                    client_rejection=rejection,
+                )
+                await self._observe(
+                    observation_run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection
+                    ),
                 )
                 break
             candidates = [
@@ -253,10 +301,10 @@ class ControlManager:
                 results = await self.executor.execute_step(
                     indices, candidates, self.graph, step_context
                 )
-            except AxiomViolation as exc:
+            except ToolNotAllowedError as exc:
                 checks.append(
-                    AxiomCheck(
-                        name=exc.axiom or "AxiomViolation",
+                    GateCheck(
+                        name="ToolAllowList",
                         stage="result",
                         passed=False,
                         message=str(exc),
@@ -269,7 +317,9 @@ class ControlManager:
                 await self._observe(
                     observation_run_id,
                     "step_completed",
-                    {**step_payload, "status": "rejected"},
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=str(exc)
+                    ),
                 )
                 break
 
@@ -277,7 +327,7 @@ class ControlManager:
                 preview_state, _ = StateManager(step_context).preview(results)
             except StateConflictError as exc:
                 checks.append(
-                    AxiomCheck(
+                    GateCheck(
                         name="StateConflict",
                         stage="result",
                         passed=False,
@@ -291,7 +341,9 @@ class ControlManager:
                 await self._observe(
                     observation_run_id,
                     "step_completed",
-                    {**step_payload, "status": "rejected"},
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=str(exc), results=results
+                    ),
                 )
                 break
 
@@ -300,19 +352,22 @@ class ControlManager:
                 results,
                 preview_state,
                 step_context.current_state,
+                skip_backend_only=True,
             )
             checks.extend(result_checks)
             failed = [check for check in result_checks if not check.passed]
             if failed:
+                rejection = failed[0].message or f"gate '{failed[0].name}' failed"
                 view = await self._backend.submit_control_results(
                     str(view["run_id"]),
-                    client_rejection=failed[0].message
-                    or f"axiom '{failed[0].name}' violated",
+                    client_rejection=rejection,
                 )
                 await self._observe(
                     observation_run_id,
                     "step_completed",
-                    {**step_payload, "status": "rejected"},
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection, results=results
+                    ),
                 )
                 break
 
@@ -338,21 +393,23 @@ class ControlManager:
             await self._observe(
                 observation_run_id,
                 "step_completed",
-                {
-                    **step_payload,
-                    "status": (
+                self._step_completed_payload(
+                    step_payload,
+                    (
                         "completed"
                         if view.get("status") in {"awaiting_execution", "completed"}
                         else str(view.get("status") or "failed")
                     ),
-                },
+                    results=results,
+                    state=dict(view.get("state") or {}),
+                ),
             )
 
         final_state = str(view.get("current_state") or context.current_state)
         rejection = view.get("rejection")
         if isinstance(rejection, str) and rejection:
             checks.append(
-                AxiomCheck(
+                GateCheck(
                     name="BackendControl",
                     stage="result",
                     passed=False,
@@ -374,7 +431,7 @@ class ControlManager:
 
     def _remote_guard_check(
         self, node_ids: list[str], context: RunContext
-    ) -> AxiomCheck:
+    ) -> GateCheck:
         frontier = {context.current_state}
         for node_id in node_ids:
             definition = self.graph.nodes[node_id]
@@ -386,7 +443,7 @@ class ControlManager:
                 for source in frontier
             )
             if not allowed:
-                return AxiomCheck(
+                return GateCheck(
                     name="EdgeGuard",
                     stage="result",
                     passed=False,
@@ -396,16 +453,31 @@ class ControlManager:
                         f"from {sorted(frontier)}"
                     ),
                 )
-        return AxiomCheck(name="EdgeGuard", stage="result", passed=True)
+        return GateCheck(name="EdgeGuard", stage="result", passed=True)
 
     async def _run_control_cycle(
-        self, context: RunContext, run_id: str | None
+        self,
+        context: RunContext,
+        run_id: str | None,
+        initial_checks: list[GateCheck] | None = None,
     ) -> RunResult:
-        # Selection always runs; search is not permission.
-        candidates = self.selector.select(context, self.graph)
-        if inspect.isawaitable(candidates):
-            candidates = await candidates
-        plan = await self.router.route(context, candidates)
+        # Deterministic short-circuit: exactly one matching edge commits
+        # without the semantic router.
+        short_circuit = self._deterministic_plan(context)
+        if short_circuit is not None:
+            candidates, plan = short_circuit
+        elif self.graph.semantic_candidate_ids(context.current_state) is None:
+            # No semantic edges from this state → fallback edge.
+            candidates, plan = self._fallback_plan(context)
+        else:
+            # Candidates are the concrete targets of outgoing semantic edges
+            # (plus the dedicated fallback). The semantic router chooses.
+            candidates = self._semantic_candidates(context)
+            actionable = [c for c in candidates if not c.is_fallback]
+            if not actionable:
+                candidates, plan = self._fallback_plan(context)
+            else:
+                plan = await self.router.route(context, candidates)
         if self.decision_logger is not None:
             self.decision_logger.log_router_decision(context, candidates, plan)
         await self._observe(
@@ -420,45 +492,21 @@ class ControlManager:
             },
         )
 
-        checks: list[AxiomCheck] = []
+        checks: list[GateCheck] = list(initial_checks or [])
 
         # Gate 1: deterministic plan validation (topology, prerequisites, edges).
         try:
             self.validator.validate(plan, candidates, self.graph, context)
-            checks.append(AxiomCheck(name="PlanValidator", stage="plan", passed=True))
+            checks.append(GateCheck(name="PlanValidator", stage="plan", passed=True))
         except PlanValidationError as exc:
             checks.append(
-                AxiomCheck(
+                GateCheck(
                     name="PlanValidator", stage="plan", passed=False, message=str(exc)
                 )
             )
             return self._result(context, plan, candidates, [], context.current_state,
                                 dict(context.state), checks, completed=False,
                                 rejection=str(exc), committed=[])
-
-        # Gate 2: plan-stage axioms (global/state scoped, then per planned node).
-        plan_proposal = Proposal(
-            kind="plan",
-            state=dict(context.state),
-            current_state=context.current_state,
-            plan=plan,
-        )
-        checks.extend(self.axiom_engine.evaluate("plan", context, plan_proposal))
-        for node_id in self._planned_node_ids(plan, candidates):
-            checks.extend(
-                self.axiom_engine.evaluate(
-                    "plan",
-                    context,
-                    plan_proposal.model_copy(update={"node_id": node_id}),
-                    node_scoped_only=True,
-                )
-            )
-        failed = [check for check in checks if not check.passed]
-        if failed:
-            rejection = failed[0].message or f"axiom '{failed[0].name}' violated"
-            return self._result(context, plan, candidates, [], context.current_state,
-                                dict(context.state), checks, completed=False,
-                                rejection=rejection, committed=[])
 
         # Execution: run each step, gate its results, then commit at most one
         # state change — in that order, always.
@@ -471,14 +519,16 @@ class ControlManager:
 
         for step_number, indices in enumerate(plan.execution_plan):
             step_targets = {candidates[index].node_id for index in indices}
-            step_payload = {"step": step_number, "node_ids": sorted(step_targets)}
-            await self._observe(run_id, "step_started", step_payload)
             step_context = context.model_copy(
                 update={
                     "current_state": state_manager.current_state,
                     "state": state_manager.snapshot(),
                 }
             )
+            step_payload = self._step_payload(
+                step_number, sorted(step_targets), step_context
+            )
+            await self._observe(run_id, "step_started", step_payload)
 
             # Gate: edge guards run against the pre-step state, before the
             # side effect of executing the node (fail-closed).
@@ -489,7 +539,24 @@ class ControlManager:
             if not guard_check.passed:
                 completed, rejection = False, guard_check.message
                 await self._observe(
-                    run_id, "step_completed", {**step_payload, "status": "rejected"}
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection
+                    ),
+                )
+                break
+
+            input_check = self._step_input_check(sorted(step_targets), step_context.state)
+            checks.append(input_check)
+            if not input_check.passed:
+                completed, rejection = False, input_check.message
+                await self._observe(
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection
+                    ),
                 )
                 break
 
@@ -497,10 +564,10 @@ class ControlManager:
                 results = await self.executor.execute_step(
                     list(indices), candidates, self.graph, step_context
                 )
-            except AxiomViolation as exc:
+            except ToolNotAllowedError as exc:
                 checks.append(
-                    AxiomCheck(
-                        name=exc.axiom or "AxiomViolation",
+                    GateCheck(
+                        name="ToolAllowList",
                         stage="result",
                         passed=False,
                         message=str(exc),
@@ -508,7 +575,11 @@ class ControlManager:
                 )
                 completed, rejection = False, str(exc)
                 await self._observe(
-                    run_id, "step_completed", {**step_payload, "status": "rejected"}
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection
+                    ),
                 )
                 break
 
@@ -516,7 +587,7 @@ class ControlManager:
                 preview_state, merged_next = state_manager.preview(results)
             except StateConflictError as exc:
                 checks.append(
-                    AxiomCheck(
+                    GateCheck(
                         name="StateConflict",
                         stage="result",
                         passed=False,
@@ -525,7 +596,11 @@ class ControlManager:
                 )
                 completed, rejection = False, str(exc)
                 await self._observe(
-                    run_id, "step_completed", {**step_payload, "status": "rejected"}
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection, results=results
+                    ),
                 )
                 break
 
@@ -543,9 +618,13 @@ class ControlManager:
             step_failed = [check for check in step_checks if not check.passed]
             if step_failed:
                 completed = False
-                rejection = step_failed[0].message or f"axiom '{step_failed[0].name}' violated"
+                rejection = step_failed[0].message or f"gate '{step_failed[0].name}' failed"
                 await self._observe(
-                    run_id, "step_completed", {**step_payload, "status": "rejected"}
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload, "rejected", rejection=rejection, results=results
+                    ),
                 )
                 break
 
@@ -569,11 +648,25 @@ class ControlManager:
             if any(result.status == "failed" for result in results):
                 completed = False
                 await self._observe(
-                    run_id, "step_completed", {**step_payload, "status": "failed"}
+                    run_id,
+                    "step_completed",
+                    self._step_completed_payload(
+                        step_payload,
+                        "failed",
+                        results=results,
+                        state=state_manager.snapshot(),
+                    ),
                 )
                 break
             await self._observe(
-                run_id, "step_completed", {**step_payload, "status": "completed"}
+                run_id,
+                "step_completed",
+                self._step_completed_payload(
+                    step_payload,
+                    "completed",
+                    results=results,
+                    state=state_manager.snapshot(),
+                ),
             )
 
         return self._result(
@@ -591,6 +684,58 @@ class ControlManager:
 
     # -- observability -------------------------------------------------------
 
+    def _run_input(self, context: RunContext) -> dict[str, Any] | None:
+        """Debug payload describing what the whole run received."""
+        if not self.capture_payloads:
+            return None
+        return {
+            "intent": context.intent,
+            "current_state": context.current_state,
+            "history": [
+                {"role": message.role, "content": message.content}
+                for message in context.history
+            ],
+            "state": dict(context.state),
+            "metadata": dict(context.metadata),
+        }
+
+    def _step_payload(
+        self, step_number: int, node_ids: Iterable[str], step_context: RunContext
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "step": step_number,
+            "node_ids": sorted(node_ids),
+        }
+        if self.capture_payloads:
+            payload["input"] = {
+                "current_state": step_context.current_state,
+                "state": dict(step_context.state),
+            }
+        return payload
+
+    def _step_completed_payload(
+        self,
+        step_payload: dict[str, Any],
+        status: str,
+        *,
+        results: list[NodeResult] | None = None,
+        state: dict[str, Any] | None = None,
+        rejection: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {**step_payload, "status": status}
+        if not self.capture_payloads:
+            return payload
+        if results is not None:
+            output: dict[str, Any] = {
+                "results": [_wire_node_result(result) for result in results]
+            }
+            if state is not None:
+                output["state"] = dict(state)
+            payload["output"] = output
+        if rejection:
+            payload["rejection"] = rejection
+        return payload
+
     async def _observation_started(self, context: RunContext) -> str | None:
         if self.observer is None:
             return None
@@ -598,7 +743,8 @@ class ControlManager:
             operation = self.observer.run_started(
                 request_id=context.request_id,
                 initial_state=context.current_state,
-                manifest=graph_manifest(self.graph),
+                manifest=graph_manifest(self.graph, self.tools),
+                input=self._run_input(context),
             )
         except Exception:
             return None
@@ -617,13 +763,18 @@ class ControlManager:
         await best_effort_call(operation, timeout=self.telemetry_timeout)
 
     async def _observation_finished(
-        self, run_id: str | None, *, status: str, final_state: str
+        self,
+        run_id: str | None,
+        *,
+        status: str,
+        final_state: str,
+        output: dict[str, Any] | None = None,
     ) -> None:
         if self.observer is None or run_id is None:
             return
         try:
             operation = self.observer.run_finished(
-                run_id, status=status, final_state=final_state
+                run_id, status=status, final_state=final_state, output=output
             )
         except Exception:
             return
@@ -637,19 +788,46 @@ class ControlManager:
         results: list[NodeResult],
         preview_state: dict[str, Any],
         current_state: str,
-    ) -> list[AxiomCheck]:
-        checks: list[AxiomCheck] = []
-        for result in results:
-            proposal = Proposal(
-                kind="result",
-                state=preview_state,
-                current_state=current_state,
-                next_state=result.next_state,
-                node_id=result.node_id,
-                result=result,
-            )
-            checks.extend(self.axiom_engine.evaluate("result", context, proposal))
-        return checks
+        *,
+        skip_backend_only: bool = False,
+    ) -> list[GateCheck]:
+        return []
+
+    def _entry_input_check(self, context: RunContext) -> GateCheck | None:
+        """Built-in entry gate: a run starting at Start must match input_schema."""
+        if self.graph.input_schema is None or context.current_state != START:
+            return None
+        message = self.graph.entry_input_error(context.state)
+        return GateCheck(
+            name="InputSchema",
+            stage="plan",
+            passed=message is None,
+            message=message or "",
+        )
+
+    def _step_input_check(
+        self, node_ids: list[str], state: dict[str, Any]
+    ) -> GateCheck:
+        """Built-in per-node input gate, evaluated before a step executes.
+
+        Each planned actionable node may declare ``input_schema``; the pre-step
+        workflow state must satisfy every such contract. Fallback nodes are
+        exempt (safe stop).
+        """
+        for node_id in node_ids:
+            definition = self.graph.nodes.get(node_id)
+            if definition is None or definition.is_fallback:
+                continue
+            message = definition.input_error(state)  # input_schema is required
+            if message is not None:
+                return GateCheck(
+                    name="NodeInputSchema",
+                    stage="result",
+                    passed=False,
+                    node_id=node_id,
+                    message=message,
+                )
+        return GateCheck(name="NodeInputSchema", stage="result", passed=True)
 
     def _step_guard_check(
         self,
@@ -658,8 +836,8 @@ class ControlManager:
         candidates: list[Candidate],
         indices: list[int],
         state: dict[str, Any],
-    ) -> AxiomCheck:
-        """Built-in edge-guard axiom, evaluated before a step executes.
+    ) -> GateCheck:
+        """Built-in edge-guard gate, evaluated before a step executes.
 
         For every planned hop into this step, at least one permitting edge's
         guard must allow it against the pre-step state. The dedicated
@@ -676,7 +854,7 @@ class ControlManager:
                 for source in frontier
             )
             if not allowed:
-                return AxiomCheck(
+                return GateCheck(
                     name="EdgeGuard",
                     stage="result",
                     passed=False,
@@ -686,7 +864,7 @@ class ControlManager:
                         f"from {sorted(frontier)}"
                     ),
                 )
-        return AxiomCheck(name="EdgeGuard", stage="result", passed=True)
+        return GateCheck(name="EdgeGuard", stage="result", passed=True)
 
     def _transition_check(
         self,
@@ -694,24 +872,24 @@ class ControlManager:
         target: str | None,
         state_manager: StateManager,
         preview_state: dict[str, Any],
-    ) -> AxiomCheck:
-        """Built-in transition-legality + guard axiom, evaluated at commit time.
+    ) -> GateCheck:
+        """Built-in transition-legality + guard gate, evaluated at commit time.
 
         The plan validator already approved hops between planned nodes; this
         gate re-verifies the *actual* proposed target (handlers may deviate)
         and evaluates edge guards against the previewed state, fail-closed.
         """
         if target is None or target == state_manager.current_state:
-            return AxiomCheck(name="TransitionLegality", stage="result", passed=True)
+            return GateCheck(name="TransitionLegality", stage="result", passed=True)
         if target in sources:
             # Moving onto a plan-validated step node's own state.
-            return AxiomCheck(name="TransitionLegality", stage="result", passed=True)
+            return GateCheck(name="TransitionLegality", stage="result", passed=True)
         for source in sources | {state_manager.current_state}:
             if self.graph.allows(source, target) and self.graph.guard_allows(
                 source, target, preview_state
             ):
-                return AxiomCheck(name="TransitionLegality", stage="result", passed=True)
-        return AxiomCheck(
+                return GateCheck(name="TransitionLegality", stage="result", passed=True)
+        return GateCheck(
             name="TransitionLegality",
             stage="result",
             passed=False,
@@ -723,13 +901,110 @@ class ControlManager:
 
     # -- helpers -------------------------------------------------------------
 
-    @staticmethod
-    def _planned_node_ids(plan: RoutingPlan, candidates: list[Candidate]) -> list[str]:
-        return [
-            candidates[index].node_id
-            for step in plan.execution_plan
-            for index in step
+    def _deterministic_plan(
+        self, context: RunContext
+    ) -> tuple[list[Candidate], RoutingPlan] | None:
+        """Return a plan when exactly one deterministic edge matches."""
+        matching = self.graph.matching_deterministic(
+            context.current_state, context.state
+        )
+        if len(matching) != 1:
+            return None
+        target_id = matching[0].target
+        if target_id not in self.graph.nodes and target_id not in {"Start", "End"}:
+            return None
+        if target_id in self.graph.nodes:
+            definition = self.graph.nodes[target_id]
+            target = Candidate(
+                node_id=definition.id,
+                name=definition.name,
+                description=definition.description,
+                prerequisites=definition.prerequisites,
+                is_fallback=definition.is_fallback,
+            )
+        else:
+            # Transition toward End/Start — represent as a synthetic candidate
+            # so the validator/executor can still see a sequential plan tip.
+            return None
+        fallback = self.graph.fallback_node
+        candidates = [
+            target,
+            Candidate(
+                node_id=fallback.id,
+                name=fallback.name,
+                description=fallback.description,
+                prerequisites=fallback.prerequisites,
+                is_fallback=True,
+            ),
         ]
+        plan = RoutingPlan(
+            reasoning=(
+                f"Deterministic edge {context.current_state!r} -> {target_id!r}."
+            ),
+            topology=Topology.SEQUENTIAL,
+            execution_plan=[[0]],
+        )
+        return candidates, plan
+
+    def _fallback_plan(
+        self, context: RunContext
+    ) -> tuple[list[Candidate], RoutingPlan]:
+        """Build a fallback-topology plan from the fallback edge."""
+        fallback_id = self.graph.fallback_target(context.current_state)
+        fallback = self.graph.nodes.get(fallback_id, self.graph.fallback_node)
+        candidates = [
+            Candidate(
+                node_id=fallback.id,
+                name=fallback.name,
+                description=fallback.description,
+                prerequisites=fallback.prerequisites,
+                is_fallback=True,
+            )
+        ]
+        plan = RoutingPlan(
+            reasoning=(
+                f"No deterministic or semantic route from "
+                f"{context.current_state!r}; using fallback edge to "
+                f"{fallback.id!r}."
+            ),
+            topology=Topology.FALLBACK,
+            execution_plan=[[0]],
+        )
+        return candidates, plan
+
+    def _semantic_candidates(self, context: RunContext) -> list[Candidate]:
+        """Build router candidates from outgoing semantic edge targets."""
+        scoped = self.graph.semantic_candidate_ids(context.current_state) or set()
+        actionable: list[Candidate] = []
+        for item in self.graph.nodes.values():
+            if item.is_fallback or item.id not in scoped:
+                continue
+            metadata: dict[str, Any] = {}
+            if item.group:
+                metadata["group"] = item.group
+            actionable.append(
+                Candidate(
+                    node_id=item.id,
+                    name=item.name,
+                    description=item.description,
+                    prerequisites=item.prerequisites,
+                    is_fallback=False,
+                    metadata=metadata,
+                )
+            )
+            if len(actionable) >= _MAX_ACTIONABLE_CANDIDATES:
+                break
+        fallback = self.graph.fallback_node
+        actionable.append(
+            Candidate(
+                node_id=fallback.id,
+                name=fallback.name,
+                description=fallback.description,
+                prerequisites=fallback.prerequisites,
+                is_fallback=True,
+            )
+        )
+        return actionable
 
     def _result(
         self,
@@ -739,7 +1014,7 @@ class ControlManager:
         steps: list[ExecutionStepResult],
         final_state: str,
         state: dict[str, Any],
-        checks: list[AxiomCheck],
+        checks: list[GateCheck],
         *,
         completed: bool,
         rejection: str | None,
@@ -753,7 +1028,7 @@ class ControlManager:
             final_state=final_state,
             plan=plan,
             candidates=candidates,
-            axiom_checks=checks,
+            gate_checks=checks,
             steps=steps,
             committed_transitions=committed,
             rejected=rejected,

@@ -4,33 +4,46 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from neosyntropy import ControlManager, Edge, Graph, graph_manifest, node
+from neosyntropy import (
+    OpenInput,
+    ControlManager,
+    Edge,
+    Graph,
+    TextOutput,
+    graph_manifest,
+    node,
+)
 
 
-@node(id="Greet")
+@node(id="Greet", input_schema=OpenInput, output_schema=TextOutput)
 def greet(ctx):
-    return ctx.result(output="Hello", next_state="End")
+    return ctx.result(output={"message": "Hello"}, next_state="End")
 
 
-@node(id="OutOfScope", is_fallback=True)
+@node(id="OutOfScope", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
 def out_of_scope(ctx):
-    return ctx.result(output="Out of scope")
+    return ctx.result(output={"message": "Out of scope"})
 
 
 graph = Graph(
     nodes=[greet, out_of_scope],
     edges=[
-        Edge(source="Start", target="Greet", label="first"),
-        Edge(source="Greet", target="End", label="complete"),
+        Edge(source="Start", target="Greet", kind="deterministic"),
+        Edge(source="Greet", target="End", kind="deterministic"),
     ],
 )
 
 
 class ConsoleObserver:
     async def run_started(
-        self, *, request_id: str, initial_state: str, manifest: Mapping[str, Any]
+        self,
+        *,
+        request_id: str,
+        initial_state: str,
+        manifest: Mapping[str, Any],
+        input: Mapping[str, Any] | None = None,
     ) -> str:
-        print("run_started", request_id, initial_state, manifest)
+        print("run_started", request_id, initial_state, manifest, input)
         return request_id
 
     async def event(
@@ -39,9 +52,14 @@ class ConsoleObserver:
         print(event_type, payload)
 
     async def run_finished(
-        self, run_id: str, *, status: str, final_state: str
+        self,
+        run_id: str,
+        *,
+        status: str,
+        final_state: str,
+        output: Mapping[str, Any] | None = None,
     ) -> None:
-        print("run_finished", status, final_state)
+        print("run_finished", status, final_state, output)
 
 
 print(graph_manifest(graph))

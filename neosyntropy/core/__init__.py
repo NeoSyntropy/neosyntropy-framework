@@ -1,1 +1,1 @@
-"""Core primitives: models, nodes, edges, axioms, groups, graph, state."""
+"""Core primitives: models, nodes, edges, groups, graph, state."""

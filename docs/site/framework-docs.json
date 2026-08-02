@@ -1,0 +1,462 @@
+{
+  "source": "neosyntropy-framework",
+  "sourceNote": "Canonical product docs for the Python SDK and control API. Synced to the frontend site via CI.",
+  "groups": [
+    {
+      "label": "Get started",
+      "articles": [
+        {
+          "slug": "",
+          "navTitle": "Overview",
+          "eyebrow": "Get started",
+          "title": "NeoSyntropy documentation",
+          "description": "Build controlled AI workflows as explicit graphs. Models propose the next step; the control layer decides what is allowed to happen.",
+          "sections": [
+            {
+              "id": "mental-model",
+              "title": "A control layer for model-driven systems",
+              "paragraphs": [
+                "NeoSyntropy separates probabilistic decisions from deterministic control. Models can propose what should happen next; a finite-state graph defines what is allowed to happen.",
+                "You author nodes and edges in the Python SDK. When backend credentials are set, the NeoSyntropy backend owns selection, routing, plan validation, and state commits. The client only executes local handlers and submits results."
+              ],
+              "cards": [
+                {
+                  "title": "Explicit graph",
+                  "text": "Nodes describe capabilities. Edges describe permitted movement.",
+                  "meta": "States + transitions"
+                },
+                {
+                  "title": "Fail-closed gates",
+                  "text": "Transition legality and guards reject illegal steps before commit.",
+                  "meta": "ControlManager"
+                },
+                {
+                  "title": "Typed tools",
+                  "text": "Nodes declare allow-listed tools with pydantic schemas; undeclared calls never run.",
+                  "meta": "@tool"
+                }
+              ]
+            },
+            {
+              "id": "two-paths",
+              "title": "Two execution modes",
+              "paragraphs": [
+                "With backend credentials, ControlManager runs an opaque execute/commit loop against POST /api/v1/control/runs. Without credentials, the SDK falls back to a local deterministic router for offline development."
+              ],
+              "callout": {
+                "title": "Preferred path",
+                "text": "Use BackendClient + ControlManager for production. Prefer the control API over internal /api/v1/framework/* inference endpoints."
+              }
+            }
+          ],
+          "sourceNote": "Grounded in neosyntropy-framework README and docs/concepts.md."
+        },
+        {
+          "slug": "quickstart",
+          "navTitle": "Quickstart",
+          "eyebrow": "Get started",
+          "title": "Run a controlled workflow",
+          "description": "Install the Python SDK, define a small graph, and run it through the backend-owned control cycle.",
+          "sections": [
+            {
+              "id": "install",
+              "title": "1. Install the SDK",
+              "paragraphs": [
+                "Install the neosyntropy package from the framework repository (or your package index when published)."
+              ],
+              "code": {
+                "label": "Bash",
+                "language": "bash",
+                "code": "pip install -e .\n# or: pip install neosyntropy"
+              }
+            },
+            {
+              "id": "credentials",
+              "title": "2. Set credentials",
+              "paragraphs": [
+                "Point the SDK at the NeoSyntropy API. Use an API key with the framework:invoke scope, or a user access token with an active subscription."
+              ],
+              "code": {
+                "label": ".env",
+                "language": "dotenv",
+                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id\n# or: NEOSYNTROPY_ACCESS_TOKEN=..."
+              }
+            },
+            {
+              "id": "run",
+              "title": "3. Define a graph and run",
+              "code": {
+                "label": "Python",
+                "language": "python",
+                "code": "from neosyntropy import BackendClient, ControlManager, Edge, Graph, EmptyOutput, TextOutput, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    \"\"\"Verify the requester owns the order.\"\"\"\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"IssueRefund\", prerequisites=(\"VerifyIdentity\",))\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"Out of scope for this workflow.\")\n\n\ngraph = Graph(\n    nodes=[verify_identity, issue_refund, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"IssueRefund\", label=\"next\"),\n        Edge(source=\"IssueRefund\", target=\"End\", label=\"complete\"),\n    ],\n    )\n\nbackend = BackendClient.from_env()\nmanager = ControlManager(graph, backend=backend)\nresult = manager.run({\"intent\": \"refund my order\", \"current_state\": \"Start\"})\n\nprint(result.final_state)\nprint(result.audit.committed_transitions)"
+              },
+              "paragraphs": [
+                "ControlManager discovers credentials from the environment when backend is omitted. Every cycle returns a RunResult with an AuditRecord of proposals, gate checks, and committed transitions."
+              ]
+            }
+          ],
+          "sourceNote": "Example adapted from neosyntropy-framework/README.md."
+        }
+      ]
+    },
+    {
+      "label": "Core concepts",
+      "articles": [
+        {
+          "slug": "concepts/neosyntropy",
+          "navTitle": "NeoSyntropy",
+          "eyebrow": "Core concepts",
+          "title": "What NeoSyntropy controls",
+          "description": "A model may propose a bounded plan; the runtime checks that plan against graph structure and transition legality before anything commits.",
+          "sections": [
+            {
+              "id": "separation",
+              "title": "Proposal is not permission",
+              "paragraphs": [
+                "The router does not perform business operations. It proposes candidate nodes and an execution topology. Validators and the transition table decide whether that proposal may run and whether state may advance.",
+                "This keeps language-model judgment useful without making model output the final authority for state movement or side effects."
+              ]
+            },
+            {
+              "id": "layers",
+              "title": "System layers",
+              "cards": [
+                {
+                  "title": "Selection",
+                  "text": "Retrieve and rank likely capabilities for the current intent and state."
+                },
+                {
+                  "title": "Control",
+                  "text": "Validate topology, prerequisites, fallback isolation, and edges."
+                },
+                {
+                  "title": "Execution",
+                  "text": "Run local handlers (or provider-backed nodes), then submit results for commit."
+                }
+              ]
+            },
+            {
+              "id": "sdk-entry",
+              "title": "Python SDK entry point",
+              "paragraphs": [
+                "The public control surface is ControlManager. With a BackendClient it starts an opaque control run, executes local work units, and submits results until the backend completes or rejects the cycle."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "from neosyntropy import ControlManager, Graph\n\nmanager = ControlManager(graph)  # BackendClient.from_env() when credentials exist\nresult = manager.run({\n    \"intent\": \"verify the customer and review refund eligibility\",\n    \"current_state\": \"Start\",\n    \"state\": {\"order_id\": \"ord_123\"},\n})\n\nprint(result.final_state)\nprint(result.completed)\nprint(result.rejected)"
+              }
+            }
+          ],
+          "sourceNote": "Grounded in neosyntropy-framework/docs/concepts.md."
+        },
+        {
+          "slug": "concepts/nodes",
+          "navTitle": "Nodes",
+          "eyebrow": "Core concepts",
+          "title": "Nodes are executable capabilities",
+          "description": "A node packages one capability the router can select. Nodes are not workflow positions.",
+          "sections": [
+            {
+              "id": "responsibility",
+              "title": "What belongs in a node",
+              "paragraphs": [
+                "A node packages a Python handler or a provider-backed prompt, declared tools, prerequisites, an optional group, and an optional fallback marker.",
+                "Nodes return a NodeResult — output, state_updates, and an optional next_state. That result is a proposal. Nothing a node returns commits state by itself."
+              ]
+            },
+            {
+              "id": "selection",
+              "title": "The router selects nodes",
+              "paragraphs": [
+                "The backend ranks candidates and proposes one or more nodes arranged as parallel, sequential, hybrid, or fallback execution.",
+                "Selecting two nodes does not create two current states. A workflow instance still has one current state, and any state change is committed only after gates pass."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "from neosyntropy import Graph, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"CheckEligibility\", prerequisites=(\"VerifyIdentity\",))\ndef check_eligibility(ctx):\n    return ctx.result(state_updates={\"eligible\": True})\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"No actionable path.\")\n\ngraph = Graph(nodes=[verify_identity, check_eligibility, out_of_scope], edges=[...])"
+              }
+            },
+            {
+              "id": "tools",
+              "title": "Tools live on nodes",
+              "paragraphs": [
+                "Tools are capabilities on a node (tools=(\"lookup_order\",)), never graph vertices. Handlers call them through a bound facade that enforces the allow-list fail-closed. Undeclared tool calls are denied fail-closed, not retries."
+              ]
+            }
+          ]
+        },
+        {
+          "slug": "concepts/groups",
+          "navTitle": "Groups",
+          "eyebrow": "Core concepts",
+          "title": "Groups organize nodes",
+          "description": "A group is a named collection of nodes. Selection still ranks individual nodes; ControlManager still owns routing, validation, and state.",
+          "sections": [
+            {
+              "id": "definition",
+              "title": "Organization, not control",
+              "paragraphs": [
+                "Groups name collections of nodes for organization and candidate metadata. The validator and executor never consult groups.",
+                "Grouping must not create a second control path — one pipeline owns the sequence end to end."
+              ]
+            },
+            {
+              "id": "sdk-example",
+              "title": "Assign a group on the node",
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "from neosyntropy import node\n\n@node(id=\"IssueRefund\", group=\"billing\")\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")"
+              },
+              "callout": {
+                "title": "See Control manager",
+                "text": "Regardless of how many groups a project contains, ControlManager owns select → route → validate → execute → commit."
+              }
+            }
+          ]
+        },
+        {
+          "slug": "concepts/edges",
+          "navTitle": "Edges and transitions",
+          "eyebrow": "Core concepts",
+          "title": "Edges define legal movement",
+          "description": "Nodes perform work; edges define which state-to-state movements are legal.",
+          "sections": [
+            {
+              "id": "representation",
+              "title": "State transitions",
+              "paragraphs": [
+                "An edge connects one state to another. A node result may propose a target state; only a listed edge (or allow_unlisted_transitions=True) permits the move.",
+                "Edges carry labels with a fixed priority order that drives the deterministic preferred-path router, and optional guards — callables over state that gate the edge at runtime. Guards fail closed."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "from neosyntropy import Edge, Graph, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result()\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result()\n\ngraph = Graph(\n    nodes=[verify_identity, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"End\", label=\"complete\"),\n    ],\n)\n\nprint(graph.allows(\"Start\", \"VerifyIdentity\"))  # True"
+              }
+            },
+            {
+              "id": "missing-edges",
+              "title": "When edges are not listed",
+              "paragraphs": [
+                "Missing edges do not skip selection. Search still finds relevant nodes; validation fail-closes unless the hop is listed or the graph explicitly allows unlisted transitions."
+              ],
+              "callout": {
+                "title": "Search is not permission",
+                "text": "Node search answers relevance. Edges answer legality. A high-scoring node still cannot advance state without a legal transition."
+              }
+            }
+          ]
+        },
+        {
+          "slug": "concepts/control-manager",
+          "navTitle": "Control manager",
+          "eyebrow": "Core concepts",
+          "title": "ControlManager owns the cycle",
+          "description": "One object runs select → route → validate → gate → execute → gate → commit → audit.",
+          "sections": [
+            {
+              "id": "nodes-and-state",
+              "title": "Nodes are selected; state is advanced",
+              "paragraphs": [
+                "The control layer can select multiple nodes because capabilities may run in parallel or sequence. It does not select multiple states.",
+                "After selected nodes finish, results propose state updates. Gates check legality; the backend commits at most one transition per step."
+              ],
+              "callout": {
+                "title": "Architectural boundary",
+                "text": "Node selection answers “what work should run?” State transition answers “where is the workflow now?” Keeping these decisions separate prevents execution topology from becoming workflow state."
+              }
+            },
+            {
+              "id": "flow",
+              "title": "Control flow",
+              "code": {
+                "label": "Pipeline",
+                "language": "text",
+                "code": "input -> candidate selection -> router proposal -> plan validation\n      -> execution -> guards / transition checks -> one state commit\n      -> audit record"
+              },
+              "bullets": [
+                "Proposal is not permission — validators and the transition table decide.",
+                "Exactly one current state; at most one commit per plan step.",
+                "Fail-closed gates before commit, even after successful execution.",
+                "Every graph has exactly one dedicated fallback node.",
+                "Input is evidence, not authority."
+              ]
+            },
+            {
+              "id": "remote",
+              "title": "Backend-owned control (preferred)",
+              "paragraphs": [
+                "When BackendClient credentials are configured, the backend owns selection, routing, validation, and commits. The client receives opaque execute steps (node ids only), runs local handlers, and posts results. Responses never include topology, candidates, scores, providers, or model names."
+              ],
+              "code": {
+                "label": "Remote loop",
+                "language": "text",
+                "code": "POST /api/v1/control/runs\n  <- status=awaiting_execution, step.nodes=[...]\nexecute local handlers\nPOST /api/v1/control/runs/{run_id}/results\n  <- next step | completed | rejected"
+              }
+            },
+            {
+              "id": "offline",
+              "title": "Offline fallback",
+              "paragraphs": [
+                "Without backend credentials, ControlManager uses DeterministicRouter locally: walk outgoing edges by label priority, or propose the dedicated fallback when nothing is legal."
+              ]
+            }
+          ],
+          "sourceNote": "Implemented by ControlManager in neosyntropy-framework and /api/v1/control/runs in neo_syntropy_backend."
+        }
+      ]
+    },
+    {
+      "label": "API reference",
+      "articles": [
+        {
+          "slug": "api",
+          "navTitle": "Control API",
+          "eyebrow": "API reference",
+          "title": "Backend control API",
+          "description": "Opaque execute/commit loop for framework workflows. Prefer this surface over internal framework inference endpoints.",
+          "sections": [
+            {
+              "id": "overview",
+              "title": "What the API exposes",
+              "paragraphs": [
+                "The control API starts a backend-owned cycle and returns only client-visible fields: run status, current state, opaque execute steps, committed transitions, and rejection reasons.",
+                "It never returns topology, candidates, scores, providers, model names, or execution plans."
+              ]
+            },
+            {
+              "id": "auth",
+              "title": "Authentication",
+              "cards": [
+                {
+                  "title": "User JWT",
+                  "text": "Authorization: Bearer <access_token> with an active subscription.",
+                  "meta": "402 if missing"
+                },
+                {
+                  "title": "API key",
+                  "text": "Authorization: Bearer nsk_... with scope framework:invoke and an active subscription.",
+                  "meta": "Optional X-NeoSyntropy-Project-ID"
+                }
+              ]
+            },
+            {
+              "id": "endpoints",
+              "title": "Endpoints",
+              "cards": [
+                {
+                  "title": "POST /api/v1/control/runs",
+                  "text": "Start a control run with a graph manifest and request context.",
+                  "meta": "Returns ControlRunView"
+                },
+                {
+                  "title": "POST /api/v1/control/runs/{run_id}/results",
+                  "text": "Submit local node results or a client_rejection; receive the next step or terminal status.",
+                  "meta": "Commit or reject"
+                },
+                {
+                  "title": "GET /api/v1/control/runs/{run_id}",
+                  "text": "Poll client-visible run status. Sessions are in-memory with a one-hour TTL.",
+                  "meta": "Ownership-scoped"
+                }
+              ]
+            },
+            {
+              "id": "start",
+              "title": "Start a run",
+              "paragraphs": [
+                "Send a schema_version 1 graph manifest (nodes, edges, allow_unlisted_transitions) plus request context. Graphs require unique node ids and exactly one is_fallback: true node."
+              ],
+              "code": {
+                "label": "Request",
+                "language": "shell",
+                "code": "curl -X POST \"$NEOSYNTROPY_API_URL/api/v1/control/runs\" \\\n  -H \"Authorization: Bearer $NEOSYNTROPY_API_KEY\" \\\n  -H \"X-NeoSyntropy-Project-ID: $NEOSYNTROPY_PROJECT_ID\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"graph\": {\n      \"schema_version\": 1,\n      \"nodes\": [\n        {\n          \"id\": \"Verify\",\n          \"name\": \"Verify\",\n          \"description\": \"verify identity\",\n          \"prerequisites\": [],\n          \"is_fallback\": false\n        },\n        {\n          \"id\": \"OutOfScope\",\n          \"name\": \"Out of scope\",\n          \"description\": \"fallback\",\n          \"prerequisites\": [],\n          \"is_fallback\": true\n        }\n      ],\n      \"edges\": [\n        {\"source\": \"Start\", \"target\": \"Verify\", \"label\": \"first\"},\n        {\"source\": \"Verify\", \"target\": \"End\", \"label\": \"complete\"}\n      ],\n      \"allow_unlisted_transitions\": false\n    },\n    \"request\": {\n      \"intent\": \"refund my order\",\n      \"current_state\": \"Start\",\n      \"history\": [],\n      \"prior_executions\": [],\n      \"state\": {},\n      \"metadata\": {}\n    },\n    \"category\": \"general\"\n  }'"
+              }
+            },
+            {
+              "id": "start-response",
+              "title": "Start response",
+              "code": {
+                "label": "Response",
+                "language": "json",
+                "code": "{\n  \"run_id\": \"…\",\n  \"status\": \"awaiting_execution\",\n  \"current_state\": \"Start\",\n  \"state\": {},\n  \"step\": { \"step\": 0, \"nodes\": [\"Verify\"] },\n  \"committed_transitions\": [],\n  \"rejection\": null,\n  \"completed\": false\n}"
+              }
+            },
+            {
+              "id": "results",
+              "title": "Submit results",
+              "paragraphs": [
+                "Cover exactly the pending step.nodes with results, or send client_rejection (string ≤ 2000). The backend merges state, checks transition legality, commits at most one transition per step, and returns the next view."
+              ],
+              "code": {
+                "label": "Request",
+                "language": "shell",
+                "code": "curl -X POST \"$NEOSYNTROPY_API_URL/api/v1/control/runs/$RUN_ID/results\" \\\n  -H \"Authorization: Bearer $NEOSYNTROPY_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"results\": [\n      {\n        \"node_id\": \"Verify\",\n        \"status\": \"succeeded\",\n        \"output\": null,\n        \"state_updates\": {\"verified\": true},\n        \"next_state\": \"Verify\",\n        \"error\": null\n      }\n    ],\n    \"client_rejection\": null\n  }'"
+              }
+            },
+            {
+              "id": "sdk-preferred",
+              "title": "SDK path (preferred)",
+              "paragraphs": [
+                "Most applications should use BackendClient and ControlManager instead of calling the HTTP loop directly. The SDK builds the control graph manifest, runs local handlers, and submits wired NodeResults."
+              ],
+              "callout": {
+                "title": "Internal endpoints",
+                "text": "POST /api/v1/framework/semantic-node-hybrid, /router, and /slm power the control engine and generation. They are not the integration surface for application clients.",
+                "tone": "warning"
+              }
+            }
+          ],
+          "sourceNote": "Contracts from neo_syntropy_backend control_runs / control_engine and neosyntropy-framework BackendClient."
+        },
+        {
+          "slug": "configuration",
+          "navTitle": "Configuration",
+          "eyebrow": "Operations",
+          "title": "Configure the SDK client",
+          "description": "Client configuration is environment-driven. Router, hybrid search, and SLM URLs are server-side only.",
+          "sections": [
+            {
+              "id": "client-env",
+              "title": "Client environment",
+              "cards": [
+                {
+                  "title": "NEOSYNTROPY_API_URL",
+                  "text": "Base API URL. The SDK normalizes to …/api/v1."
+                },
+                {
+                  "title": "NEOSYNTROPY_API_KEY",
+                  "text": "nsk_… key with framework:invoke (and telemetry:write for observers)."
+                },
+                {
+                  "title": "NEOSYNTROPY_PROJECT_ID",
+                  "text": "Sent as X-NeoSyntropy-Project-ID for project-scoped telemetry."
+                },
+                {
+                  "title": "NEOSYNTROPY_ACCESS_TOKEN",
+                  "text": "Alternative to API key for user JWT auth."
+                }
+              ],
+              "code": {
+                "label": ".env",
+                "language": "dotenv",
+                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id"
+              }
+            },
+            {
+              "id": "server",
+              "title": "Server-side (not client-facing)",
+              "paragraphs": [
+                "FRAMEWORK_ROUTER_*, FRAMEWORK_SEMANTIC_NODE_HYBRID_*, and FRAMEWORK_SLM_* configure upstream inference services on the backend. Application clients do not set these."
+              ]
+            }
+          ],
+          "sourceNote": "Client vars from BackendClient.from_env(); server vars from neo_syntropy_backend .env.example."
+        }
+      ]
+    }
+  ]
+}

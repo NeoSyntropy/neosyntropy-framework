@@ -14,23 +14,9 @@ class Provider(Protocol):
         ...
 
 
-class DeterministicProvider:
-    """Default provider: no model, no sampling — echoes the rendered prompt.
-
-    Nodes are deterministic unless explicitly bound to a generative provider,
-    matching the backend's ``provider="deterministic"`` default.
-    """
-
-    def generate(self, prompt: str, *, schema: dict[str, Any] | None = None) -> str:
-        del schema
-        return prompt
-
-
 class ProviderRegistry:
     def __init__(self, providers: dict[str, Provider] | None = None):
-        self._providers: dict[str, Provider] = {"deterministic": DeterministicProvider()}
-        if providers:
-            self._providers.update(providers)
+        self._providers: dict[str, Provider] = dict(providers or {})
 
     def register(self, name: str, provider: Provider) -> None:
         self._providers[name] = provider
