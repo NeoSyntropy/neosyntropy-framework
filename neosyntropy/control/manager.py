@@ -231,6 +231,28 @@ class ControlManager:
         )
         return result
 
+    def _apply_local_router_hops(self, context: RunContext) -> RunContext:
+        """Follow unique guard-matching hops to routers/End before remote calls.
+
+        DeterministicRouter guards are not on the wire; resolve them locally so
+        the backend receives a concrete current_state.
+        """
+        state = context.current_state
+        for _ in range(16):
+            matching = self.graph.matching_deterministic(state, context.state)
+            if len(matching) != 1:
+                break
+            target = matching[0].target
+            if target == END or self.graph.is_router_state(target):
+                state = target
+                if target == END:
+                    break
+                continue
+            break
+        if state == context.current_state:
+            return context
+        return context.model_copy(update={"current_state": state})
+
     async def _run_remote_control(
         self,
         context: RunContext,
@@ -239,6 +261,32 @@ class ControlManager:
     ) -> RunResult:
         """Backend owns select/route/validate/commit; client only executes handlers."""
         assert self._backend is not None
+        context = self._apply_local_router_hops(context)
+        if context.current_state == END:
+            checks = list(initial_checks or [])
+            return self._result(
+                context,
+                None,
+                [],
+                [],
+                END,
+                dict(context.state),
+                checks,
+                completed=True,
+                rejection=None,
+                committed=[],
+            )
+        # Multi-rule DeterministicRouter: evaluate guards locally, then short-
+        # circuit through the offline cycle (backend cannot see guards).
+        if self.graph.is_router_state(context.current_state):
+            matching = self.graph.matching_deterministic(
+                context.current_state, context.state
+            )
+            if len(matching) == 1 and matching[0].target in self.graph.nodes:
+                return await self._run_control_cycle(
+                    context, observation_run_id, initial_checks
+                )
+
         request_payload = {
             "intent": context.intent,
             "request_id": context.request_id,

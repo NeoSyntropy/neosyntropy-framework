@@ -351,6 +351,8 @@ class BackendProvider:
 
 
 def _wire_node_declaration(node: Any) -> dict[str, Any]:
+    # input_schema is enforced client-side / on control-run graph nodes;
+    # the /framework/slm NodePromptDeclaration wire does not carry it.
     return {
         "id": getattr(node, "id", ""),
         "name": getattr(node, "name", "") or "",
@@ -358,7 +360,6 @@ def _wire_node_declaration(node: Any) -> dict[str, Any]:
         "prompt": getattr(node, "prompt", "") or "",
         "mode": getattr(node, "mode", None),
         "tools": list(getattr(node, "tools", ()) or ()),
-        "input_schema": getattr(node, "input_schema", None),
         "output_schema": getattr(node, "output_schema", None),
     }
 

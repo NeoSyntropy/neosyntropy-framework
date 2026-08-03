@@ -142,7 +142,49 @@ def test_graph_manifest_includes_console_fields_but_excludes_executables() -> No
         }
     ]
     assert manifest["groups"] == [{"name": "private"}]
+    assert manifest["routers"] == []
     assert manifest["tools"] == []
+
+
+def test_graph_manifest_includes_routers_and_group_entry() -> None:
+    from neosyntropy import DeterministicRouter, EmptyOutput
+
+    billing = Group(name="billing")
+
+    @billing.node(id="ValidateCard", input_schema=OpenInput, output_schema=EmptyOutput)
+    def validate(ctx):
+        return ctx.result(output={})
+
+    @billing.node(id="ProcessPayment", input_schema=OpenInput, output_schema=EmptyOutput)
+    def pay(ctx):
+        return ctx.result(output={}, next_state="End")
+
+    @node(id="Fallback", is_fallback=True, input_schema=OpenInput, output_schema=EmptyOutput)
+    def fallback(ctx):
+        return ctx.result(output={})
+
+    logic = DeterministicRouter(
+        id="BillingLogic",
+        rules=[(lambda ctx: True, "ProcessPayment")],
+    )
+    billing.routers = [logic]
+    billing.entry = "ValidateCard"
+    billing.add_edge("ValidateCard", "BillingLogic")
+
+    graph = FSM(
+        nodes=[fallback],
+        groups=[billing],
+        routers=[logic],
+        entry="ValidateCard",
+        edges=[Edge(source="ProcessPayment", target="End", kind="deterministic")],
+    )
+    manifest = graph_manifest(graph)
+
+    assert "BillingLogic" in manifest["routers"]
+    assert any(
+        group.get("name") == "billing" and group.get("entry") == "ValidateCard"
+        for group in manifest["groups"]
+    )
 
 
 def test_graph_manifest_includes_tool_catalog_and_node_output_schema() -> None:

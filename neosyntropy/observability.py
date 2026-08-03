@@ -80,7 +80,17 @@ def graph_manifest(
             }
             for edge in graph.edges
         ],
-        "groups": [{"name": group.name} for group in graph.groups.values()],
+        "groups": [
+            (
+                {"name": group.name, "entry": entry}
+                if (entry := (
+                    group.entry_id() if hasattr(group, "entry_id") else None
+                ))
+                else {"name": group.name}
+            )
+            for group in graph.groups.values()
+        ],
+        "routers": sorted(graph.router_ids),
         "tools": tool_catalog(tools),
     }
 
@@ -91,6 +101,13 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
     Includes structure the backend needs to validate and commit transitions.
     Handlers, prompts, tools, guards, and providers are excluded.
     """
+    groups: list[dict[str, Any]] = []
+    for group in graph.groups.values():
+        payload: dict[str, Any] = {"name": group.name}
+        entry = group.entry_id() if hasattr(group, "entry_id") else None
+        if entry:
+            payload["entry"] = entry
+        groups.append(payload)
     return {
         "schema_version": 1,
         "nodes": [
@@ -115,6 +132,8 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
             }
             for edge in graph.edges
         ],
+        "groups": groups,
+        "routers": sorted(graph.router_ids),
         "allow_unlisted_transitions": graph.allow_unlisted_transitions,
     }
 

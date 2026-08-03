@@ -165,7 +165,12 @@ from .core.schemas import (
 
 from .core.state import StateConflictError, StateManager
 
-from .observability import BackendTelemetryReporter, RunObserver, graph_manifest
+from .observability import (
+    BackendTelemetryReporter,
+    RunObserver,
+    control_graph_manifest,
+    graph_manifest,
+)
 
 from .providers.base import Provider, ProviderRegistry
 
@@ -389,6 +394,7 @@ __all__ = [
 
     "edge_semantic",
 
+    "control_graph_manifest",
     "graph_manifest",
 
     "node",

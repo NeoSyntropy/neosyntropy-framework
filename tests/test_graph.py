@@ -317,6 +317,49 @@ def test_group_authors_nodes_routers_entry_and_edges():
     assert result.final_state == "End"
 
 
+def test_control_graph_manifest_includes_routers_groups_and_input_schema():
+    from neosyntropy import DeterministicRouter, control_graph_manifest, node
+
+    billing = Group(name="billing")
+
+    @billing.node(id="ValidateCard", input_schema=OpenInput, output_schema=EmptyOutput)
+    def validate(ctx):
+        return ctx.result(output={})
+
+    @billing.node(id="ProcessPayment", input_schema=OpenInput, output_schema=EmptyOutput)
+    def pay(ctx):
+        return ctx.result(output={}, next_state="End")
+
+    @node(id="Fallback", is_fallback=True, input_schema=OpenInput, output_schema=EmptyOutput)
+    def fallback(ctx):
+        return ctx.result(output={})
+
+    logic = DeterministicRouter(
+        id="BillingLogic",
+        rules=[(lambda ctx: True, "ProcessPayment")],
+    )
+    billing.routers = [logic]
+    billing.entry = "ValidateCard"
+    billing.add_edge("ValidateCard", "BillingLogic")
+
+    fsm = FSM(
+        nodes=[fallback],
+        groups=[billing],
+        routers=[logic],
+        entry="ValidateCard",
+        edges=[Edge(source="ProcessPayment", target="End", kind="deterministic")],
+    )
+    manifest = control_graph_manifest(fsm)
+    assert "BillingLogic" in manifest["routers"]
+    assert any(
+        group.get("name") == "billing" and group.get("entry") == "ValidateCard"
+        for group in manifest["groups"]
+    )
+    by_id = {node["id"]: node for node in manifest["nodes"]}
+    assert by_id["ValidateCard"]["input_schema"] is not None
+    assert by_id["ValidateCard"]["output_schema"] is not None
+
+
 def test_fsm_run_wires_public_client():
     from neosyntropy import Client, node
 
