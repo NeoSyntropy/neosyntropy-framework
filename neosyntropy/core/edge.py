@@ -120,6 +120,7 @@ class TransitionTable:
     allowed: frozenset[tuple[str, str]]
     group_edges: frozenset[tuple[str, str]]
     node_groups: Mapping[str, str | None]
+    group_entries: Mapping[str, str]
     permissive: bool = False
 
     @classmethod
@@ -128,6 +129,7 @@ class TransitionTable:
         edges: list[Edge],
         *,
         node_groups: Mapping[str, str | None] | None = None,
+        group_entries: Mapping[str, str] | None = None,
         allow_unlisted_transitions: bool = False,
     ) -> TransitionTable:
         groups = node_groups or {}
@@ -145,6 +147,7 @@ class TransitionTable:
             allowed,
             group_edges,
             dict(groups),
+            dict(group_entries or {}),
             allow_unlisted_transitions,
         )
 
@@ -152,4 +155,9 @@ class TransitionTable:
         if self.permissive or (source, target) in self.allowed:
             return True
         group = self.node_groups.get(target)
-        return group is not None and (source, group) in self.group_edges
+        if group is None or (source, group) not in self.group_edges:
+            return False
+        entry = self.group_entries.get(group)
+        if entry is not None:
+            return target == entry
+        return True

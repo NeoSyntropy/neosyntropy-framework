@@ -1,45 +1,45 @@
-"""Harbor Signal Desk — grouped reasoning → schema-extraction lanes.
+"""Harbor Signal Desk — CombineNode lanes (reasoning → schema).
 
-Each operational group owns two nodes:
+Each operational group is authored as one :class:`CombineNode` that expands
+into two FSM states:
 
-1. **Reasoning** (``mode="reasoning"``) — may call tools; output schema is a
-   plain ``str`` of working notes (not a JSON object).
-2. **Schema extraction** (``mode="schema_extraction"``) — no tools; reads the
-   reasoning text plus tool evidence from state and returns a typed JSON reply.
+1. **Reasoning** (``{id}``) — may call tools; output is plain working notes.
+2. **Schema extraction** (``{id}.Schema``) — no tools; reads reasoning text
+   plus tool evidence from state and returns a typed JSON reply.
 
-Groups: ``berth``, ``cargo``, ``pilot``. Fallback is a schema-extraction stop.
+Groups: ``berth``, ``cargo``, ``pilot``. Fallback is a :func:`SchemaNode`.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from neosyntropy import (
-    OpenInput,
-    Graph,
+    COMBINE_SCHEMA_SUFFIX,
+    CombineNode,
+    FSM,
     Group,
     Node,
     NodeContext,
     NodeResult,
+    OpenInput,
+    SchemaNode,
     ToolRegistry,
     edge_deterministic,
     edge_fallback,
     edge_semantic,
     graph_manifest,
-    node,
     tool,
 )
 
-# Reasoning nodes return a JSON-string (plain text), not an object.
-REASONING_OUTPUT_SCHEMA: dict[str, Any] = {"type": "string", "minLength": 1}
-
 BERTH_SCOUT = "berth.Scout"
-BERTH_CLEARANCE = "berth.Clearance"
+BERTH_CLEARANCE = f"{BERTH_SCOUT}{COMBINE_SCHEMA_SUFFIX}"
 CARGO_INSPECT = "cargo.Inspect"
-CARGO_MANIFEST = "cargo.Manifest"
+CARGO_MANIFEST = f"{CARGO_INSPECT}{COMBINE_SCHEMA_SUFFIX}"
 PILOT_BRIEF = "pilot.Brief"
-PILOT_ADVISORY = "pilot.Advisory"
+PILOT_ADVISORY = f"{PILOT_BRIEF}{COMBINE_SCHEMA_SUFFIX}"
 FALLBACK = "signal.OutOfScope"
 
 
@@ -153,11 +153,7 @@ def _record_reasoning(
     tool_name: str,
     tool_result: dict[str, Any],
 ) -> NodeResult:
-    """Publish plain-text notes + tool evidence for the extraction sibling.
-
-    Does not jump ahead — the router follows the group's ``next`` edge into
-    the schema-extraction node on the following control cycle.
-    """
+    """Publish plain-text notes + tool evidence for the extraction sibling."""
     return ctx.result(
         output=text,
         state_updates={
@@ -188,18 +184,43 @@ def _evidence_tools(evidence: list[dict[str, Any]]) -> list[str]:
     return names
 
 
-def build_harbor_graph() -> Graph:
-    @node(
-        id=BERTH_SCOUT,
-        group="berth",
-        mode="reasoning",
-        tools=("lookup_slip",),
-        input_schema=OpenInput, output_schema=REASONING_OUTPUT_SCHEMA,
-        prompt=(
-            "Scout a berth for the vessel. Call lookup_slip when you need a slip "
-            "assignment. Reply with plain working notes only — not JSON."
-        ),
+def _with_handlers(
+    combine: CombineNode,
+    *,
+    reasoning: Callable[[NodeContext], NodeResult],
+    schema: Callable[[NodeContext], NodeResult],
+) -> CombineNode:
+    """Attach local handlers to a combine expansion for offline demos/tests."""
+
+    class _HandledCombine(CombineNode):
+        def expand(self) -> tuple[list[Node], list]:
+            nodes, edges = CombineNode.expand(self)
+            reason_node, schema_node = nodes
+            return (
+                [
+                    reason_node.model_copy(update={"handler": reasoning, "kind": "handler"}),
+                    schema_node.model_copy(update={"handler": schema, "kind": "handler"}),
+                ],
+                edges,
+            )
+
+    return _HandledCombine(
+        id=combine.id,
+        input_schema=combine.input_schema,
+        tools=combine.tools,
+        output_schema=combine.output_schema,
+        prompt=combine.prompt,
+        name=combine.name,
+        description=combine.description,
+        prerequisites=combine.prerequisites,
+        group=combine.group,
+        metadata=combine.metadata,
+        provider=combine.provider,
+        schema_prompt=combine.schema_prompt,
     )
+
+
+def build_harbor_graph() -> FSM:
     def berth_scout(ctx: NodeContext) -> NodeResult:
         vessel = str(ctx.state.get("vessel") or ctx.intent)
         slip = ctx.tools.invoke("lookup_slip", {"vessel": vessel})
@@ -211,17 +232,6 @@ def build_harbor_graph() -> Graph:
             ctx, text=text, tool_name="lookup_slip", tool_result=slip
         )
 
-    @node(
-        id=BERTH_CLEARANCE,
-        group="berth",
-        mode="schema_extraction",
-        prerequisites=(BERTH_SCOUT,),
-        input_schema=OpenInput, output_schema=BerthClearance,
-        prompt=(
-            "Turn berth scout notes and tool evidence into a clearance JSON "
-            "ticket. No tools — extract schema only."
-        ),
-    )
     def berth_clearance(ctx: NodeContext) -> NodeResult:
         notes, evidence = _notes_and_evidence(ctx)
         slip = "HOLD-1"
@@ -242,17 +252,6 @@ def build_harbor_graph() -> Graph:
         )
         return ctx.result(output=payload.model_dump(), next_state="End")
 
-    @node(
-        id=CARGO_INSPECT,
-        group="cargo",
-        mode="reasoning",
-        tools=("weigh_crate",),
-        input_schema=OpenInput, output_schema=REASONING_OUTPUT_SCHEMA,
-        prompt=(
-            "Inspect cargo. Call weigh_crate for mass and hazard flags. "
-            "Reply with plain working notes only — not JSON."
-        ),
-    )
     def cargo_inspect(ctx: NodeContext) -> NodeResult:
         crate_id = str(ctx.state.get("crate_id") or "CR-77")
         weighed = ctx.tools.invoke("weigh_crate", {"crate_id": crate_id})
@@ -265,17 +264,6 @@ def build_harbor_graph() -> Graph:
             ctx, text=text, tool_name="weigh_crate", tool_result=weighed
         )
 
-    @node(
-        id=CARGO_MANIFEST,
-        group="cargo",
-        mode="schema_extraction",
-        prerequisites=(CARGO_INSPECT,),
-        input_schema=OpenInput, output_schema=CargoManifest,
-        prompt=(
-            "Turn cargo inspection notes and scale evidence into a manifest "
-            "JSON record. No tools — extract schema only."
-        ),
-    )
     def cargo_manifest(ctx: NodeContext) -> NodeResult:
         notes, evidence = _notes_and_evidence(ctx)
         result = (evidence[0].get("result") if evidence else {}) or {}
@@ -298,17 +286,6 @@ def build_harbor_graph() -> Graph:
         )
         return ctx.result(output=payload.model_dump(), next_state="End")
 
-    @node(
-        id=PILOT_BRIEF,
-        group="pilot",
-        mode="reasoning",
-        tools=("tide_chart",),
-        input_schema=OpenInput, output_schema=REASONING_OUTPUT_SCHEMA,
-        prompt=(
-            "Brief the pilot. Call tide_chart for the channel. "
-            "Reply with plain working notes only — not JSON."
-        ),
-    )
     def pilot_brief(ctx: NodeContext) -> NodeResult:
         channel = str(ctx.state.get("channel") or "north")
         chart = ctx.tools.invoke("tide_chart", {"channel": channel})
@@ -320,17 +297,6 @@ def build_harbor_graph() -> Graph:
             ctx, text=text, tool_name="tide_chart", tool_result=chart
         )
 
-    @node(
-        id=PILOT_ADVISORY,
-        group="pilot",
-        mode="schema_extraction",
-        prerequisites=(PILOT_BRIEF,),
-        input_schema=OpenInput, output_schema=PilotAdvisory,
-        prompt=(
-            "Turn pilot brief notes and tide evidence into an advisory JSON. "
-            "No tools — extract schema only."
-        ),
-    )
     def pilot_advisory(ctx: NodeContext) -> NodeResult:
         notes, evidence = _notes_and_evidence(ctx)
         result = (evidence[0].get("result") if evidence else {}) or {}
@@ -353,39 +319,94 @@ def build_harbor_graph() -> Graph:
         )
         return ctx.result(output=payload.model_dump(), next_state="End")
 
-    @node(
+    berth = _with_handlers(
+        CombineNode(
+            id=BERTH_SCOUT,
+            group="berth",
+            tools=("lookup_slip",),
+            input_schema=OpenInput,
+            output_schema=BerthClearance,
+            prompt=(
+                "Scout a berth for the vessel. Call lookup_slip when you need a slip "
+                "assignment. Reply with plain working notes only — not JSON."
+            ),
+            schema_prompt=(
+                "Turn berth scout notes and tool evidence into a clearance JSON "
+                "ticket. No tools — extract schema only."
+            ),
+        ),
+        reasoning=berth_scout,
+        schema=berth_clearance,
+    )
+    cargo = _with_handlers(
+        CombineNode(
+            id=CARGO_INSPECT,
+            group="cargo",
+            tools=("weigh_crate",),
+            input_schema=OpenInput,
+            output_schema=CargoManifest,
+            prompt=(
+                "Inspect cargo. Call weigh_crate for mass and hazard flags. "
+                "Reply with plain working notes only — not JSON."
+            ),
+            schema_prompt=(
+                "Turn cargo inspection notes and scale evidence into a manifest "
+                "JSON record. No tools — extract schema only."
+            ),
+        ),
+        reasoning=cargo_inspect,
+        schema=cargo_manifest,
+    )
+    pilot = _with_handlers(
+        CombineNode(
+            id=PILOT_BRIEF,
+            group="pilot",
+            tools=("tide_chart",),
+            input_schema=OpenInput,
+            output_schema=PilotAdvisory,
+            prompt=(
+                "Brief the pilot. Call tide_chart for the channel. "
+                "Reply with plain working notes only — not JSON."
+            ),
+            schema_prompt=(
+                "Turn pilot brief notes and tide evidence into an advisory JSON. "
+                "No tools — extract schema only."
+            ),
+        ),
+        reasoning=pilot_brief,
+        schema=pilot_advisory,
+    )
+
+    out_of_scope = SchemaNode(
         id=FALLBACK,
-        mode="schema_extraction",
         is_fallback=True,
-        input_schema=OpenInput, output_schema=OutOfScopeReply,
+        input_schema=OpenInput,
+        output_schema=OutOfScopeReply,
         prompt="Politely refuse non-harbor requests as structured JSON.",
     )
-    def out_of_scope(ctx: NodeContext) -> NodeResult:
-        return ctx.result(
-            output=OutOfScopeReply(
-                guest_text="Signal desk only handles berth, cargo, and pilot traffic."
-            ).model_dump()
-        )
+    # Offline demo: attach a handler to the fallback schema node.
+    out_of_scope = out_of_scope.model_copy(
+        update={
+            "handler": lambda ctx: ctx.result(
+                output=OutOfScopeReply(
+                    guest_text=(
+                        "Signal desk only handles berth, cargo, and pilot traffic."
+                    )
+                ).model_dump()
+            ),
+            "kind": "handler",
+        }
+    )
 
-    return Graph(
-        nodes=[
-            berth_scout,
-            berth_clearance,
-            cargo_inspect,
-            cargo_manifest,
-            pilot_brief,
-            pilot_advisory,
-            out_of_scope,
-        ],
+    return FSM(
+        nodes=[berth, cargo, pilot, out_of_scope],
         edges=[
             edge_semantic("Start", "berth", target_kind="group"),
             edge_semantic("Start", "cargo", target_kind="group"),
             edge_semantic("Start", "pilot", target_kind="group"),
-            edge_deterministic(BERTH_SCOUT, BERTH_CLEARANCE),
+            # CombineNode auto-adds reasoning → schema edges.
             edge_deterministic(BERTH_CLEARANCE, "End"),
-            edge_deterministic(CARGO_INSPECT, CARGO_MANIFEST),
             edge_deterministic(CARGO_MANIFEST, "End"),
-            edge_deterministic(PILOT_BRIEF, PILOT_ADVISORY),
             edge_deterministic(PILOT_ADVISORY, "End"),
             edge_fallback("Start", FALLBACK),
         ],

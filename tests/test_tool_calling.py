@@ -12,7 +12,7 @@ from neosyntropy import (
     ControlManager,
     Edge,
     ExtractionError,
-    Graph,
+    FSM,
     Node,
     ProviderParameterExtractor,
     RunRequest,
@@ -233,10 +233,10 @@ def test_provider_extractor_raises_on_garbage(registry):
 # --- end to end through the control manager -----------------------------------
 
 
-def _graph_with_tool_node() -> Graph:
+def _graph_with_tool_node() -> FSM:
     from neosyntropy import TextOutput
 
-    return Graph(
+    return FSM(
         nodes=[
             Node(
                 id="Support",

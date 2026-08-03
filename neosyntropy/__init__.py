@@ -12,7 +12,7 @@ is allowed to happen. Core primitives:
 
 - :class:`Edge` — one permitted movement between states
 
-- :class:`Group` — organization without a second control path
+- :class:`Group` — named node collection; optional entry, routers, and edges
 
 - :class:`ControlManager` — the pipeline that owns the whole cycle
 
@@ -22,9 +22,7 @@ Quickstart::
 
 
 
-    from neosyntropy import ControlManager, Graph, edge_deterministic, edge_fallback, node
-
-    from neosyntropy import EmptyOutput, OpenInput, TextOutput
+    from neosyntropy import Client, EmptyOutput, OpenInput, TextOutput, Workflow, node
 
 
 
@@ -44,21 +42,11 @@ Quickstart::
 
 
 
-    graph = Graph(
+    fsm = Workflow([verify_identity], fallback=out_of_scope)
 
-        nodes=[verify_identity, out_of_scope],
+    client = Client(api_key="...", project_id="...")
 
-        edges=[
-
-            edge_deterministic("Start", "VerifyIdentity"),
-
-            edge_fallback("Start", "OutOfScope"),
-
-        ],
-
-    )
-
-    result = ControlManager(graph).run({"intent": "refund order 123"})
+    result = fsm.run({"intent": "refund order 123"}, client=client)
 
 """
 
@@ -68,11 +56,15 @@ from __future__ import annotations
 
 from .backend import (
 
+    DEFAULT_API_URL,
+
     BackendClient,
 
     BackendError,
 
     BackendProvider,
+
+    Client,
 
 )
 
@@ -104,7 +96,15 @@ from .core.edge import (
 
 )
 
-from .core.graph import END, START, Graph, GraphValidationError
+from .core.graph import (
+    END,
+    START,
+    FSM,
+    FSMValidationError,
+    Graph,
+    GraphValidationError,
+    Workflow,
+)
 
 from .core.group import Group
 
@@ -138,7 +138,20 @@ from .core.models import (
 
 )
 
-from .core.node import Node, NodeContext, NodeMode, node
+from .core.node import (
+    COMBINE_SCHEMA_SUFFIX,
+    REASONING_OUTPUT_SCHEMA,
+    REASONING_TEXT_KEY,
+    TOOL_EVIDENCE_KEY,
+    CombineNode,
+    Node,
+    NodeContext,
+    NodeKind,
+    NodeMode,
+    ReasoningNode,
+    SchemaNode,
+    node,
+)
 
 from .core.schemas import (
     EmptyInput,
@@ -158,11 +171,13 @@ from .providers.base import Provider, ProviderRegistry
 
 from .providers.callable import CallableProvider
 
+from .routing.backend_route import BackendSemanticRouter
+
 from .routing.base import Router, RouterError
 
-from .routing.deterministic import DeterministicRouter
+from .routing.declarations import DeterministicRouter, SemanticRouter
 
-from .routing.semantic import SemanticRouter
+from .routing.preferred import PreferredPathRouter
 
 from .tools.calling import (
 
@@ -230,11 +245,19 @@ __all__ = [
 
     "BackendTelemetryReporter",
 
+    "Client",
+
+    "DEFAULT_API_URL",
+
     "BoundTools",
 
     "CallableProvider",
 
+    "COMBINE_SCHEMA_SUFFIX",
+
     "Candidate",
+
+    "CombineNode",
 
     "ContextBuilder",
 
@@ -242,7 +265,11 @@ __all__ = [
 
     "DecisionLogger",
 
+    "BackendSemanticRouter",
+
     "DeterministicRouter",
+
+    "PreferredPathRouter",
 
     "Edge",
 
@@ -262,11 +289,17 @@ __all__ = [
 
     "GateCheck",
 
+    "FSM",
+
+    "FSMValidationError",
+
     "Graph",
 
     "GraphValidationError",
 
     "Group",
+
+    "Workflow",
 
     "JsonlDecisionLogger",
 
@@ -276,11 +309,23 @@ __all__ = [
 
     "NodeContext",
 
+    "NodeKind",
+
     "NodeMode",
 
     "NodeResult",
 
     "OpenOutput",
+
+    "REASONING_OUTPUT_SCHEMA",
+
+    "REASONING_TEXT_KEY",
+
+    "ReasoningNode",
+
+    "SchemaNode",
+
+    "TOOL_EVIDENCE_KEY",
 
     "ParameterExtractor",
 

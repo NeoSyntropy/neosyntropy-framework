@@ -70,11 +70,41 @@ callables over the state that gate the edge at runtime. Guards fail closed —
 a guard that raises denies the transition.
 
 
-### Group — organization, not control
+### Group — organization (and optional authored subgraph)
 
 Groups name collections of nodes for organization and candidate metadata.
-The validator and the executor never consult groups. Grouping must not
-create a second control path — one pipeline owns the sequence end to end.
+A semantic edge may target a group to scope routing to that group's nodes.
+When a group declares ``entry``, entering the group lands on that entry
+state instead of offering every member as a candidate.
+
+Groups can also author an internal subgraph that compiles into the parent
+FSM — nodes via ``@group.node``, internal ``DeterministicRouter`` /
+``SemanticRouter`` units, an ``entry``, and ``add_edge`` links from nodes
+to routers. At runtime there is still one control path: the compiled edges
+feed the same ControlManager pipeline; the group is not a second engine.
+
+```python
+billing = Group(name="billing")
+
+@billing.node(id="ValidateCard", input_schema=OpenInput, output_schema=EmptyOutput)
+def validate(ctx):
+    return ctx.result(output={}, state_updates={"card_valid": True})
+
+@billing.node(id="ProcessPayment", input_schema=OpenInput, output_schema=EmptyOutput)
+def pay(ctx):
+    return ctx.result(output={})
+
+logic = DeterministicRouter(
+    id="BillingLogic",
+    rules=[
+        (lambda ctx: ctx.state.get("card_valid") is True, "ProcessPayment"),
+        (lambda ctx: ctx.state.get("card_valid") is False, "RejectCard"),
+    ],
+)
+billing.routers = [logic]
+billing.entry = "ValidateCard"
+billing.add_edge("ValidateCard", "BillingLogic")
+```
 
 ### ControlManager — the pipeline as one object
 

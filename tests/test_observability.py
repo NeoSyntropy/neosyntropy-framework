@@ -8,7 +8,7 @@ from neosyntropy import (
     BackendClient,
     ControlManager,
     Edge,
-    Graph,
+    FSM,
     Group,
     OpenInput,
     RoutingPlan,
@@ -85,7 +85,7 @@ def test_graph_manifest_includes_console_fields_but_excludes_executables() -> No
     def fallback(ctx):
         return ctx.result(output={})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[sensitive, fallback],
         edges=[
             Edge(
@@ -176,7 +176,7 @@ def test_graph_manifest_includes_tool_catalog_and_node_output_schema() -> None:
     def fallback(ctx):
         return ctx.result(output={})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[answer, fallback],
         edges=[Edge(source="Start", target="Answer")],
         validate_reachability=False,
@@ -277,7 +277,7 @@ def test_rejected_step_payload_includes_rejection_reason() -> None:
     def fallback(ctx):
         return ctx.result(output={})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[rogue, fallback],
         edges=[Edge(source="Start", target="Rogue", kind="deterministic")],
         validate_reachability=False,
@@ -318,7 +318,7 @@ def test_failed_execution_reports_failure_then_finish() -> None:
     def fallback(ctx):
         return ctx.result(output={})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[fails, fallback],
         edges=[Edge(source="Start", target="Fails", kind="deterministic")],
         validate_reachability=False,
@@ -352,7 +352,7 @@ def test_rejected_plan_reports_rejection_then_finish() -> None:
             )
 
     base = build_graph()
-    graph = Graph(
+    graph = FSM(
         nodes=list(base.nodes.values()),
         edges=[
             Edge(source="Start", target="VerifyIdentity", kind="semantic"),

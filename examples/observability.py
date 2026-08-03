@@ -8,7 +8,7 @@ from neosyntropy import (
     OpenInput,
     ControlManager,
     Edge,
-    Graph,
+    FSM,
     TextOutput,
     graph_manifest,
     node,
@@ -25,7 +25,7 @@ def out_of_scope(ctx):
     return ctx.result(output={"message": "Out of scope"})
 
 
-graph = Graph(
+graph = FSM(
     nodes=[greet, out_of_scope],
     edges=[
         Edge(source="Start", target="Greet", kind="deterministic"),

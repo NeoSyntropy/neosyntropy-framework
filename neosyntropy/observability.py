@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .backend import BackendClient
-from .core.graph import Graph
+from .core.graph import FSM
 
 if TYPE_CHECKING:
     from .tools.registry import ToolRegistry
@@ -41,7 +41,7 @@ def tool_catalog(tools: ToolRegistry | Mapping[str, Any] | None = None) -> list[
 
 
 def graph_manifest(
-    graph: Graph,
+    graph: FSM,
     tools: ToolRegistry | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the visualization graph shape safe to send off-process.
@@ -85,7 +85,7 @@ def graph_manifest(
     }
 
 
-def control_graph_manifest(graph: Graph) -> dict[str, Any]:
+def control_graph_manifest(graph: FSM) -> dict[str, Any]:
     """Minimum graph definition for backend-owned control runs.
 
     Includes structure the backend needs to validate and commit transitions.

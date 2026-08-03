@@ -16,6 +16,44 @@ class BackendError(RuntimeError):
     """The NeoSyntropy backend rejected or could not serve a request."""
 
 
+DEFAULT_API_URL = "https://api.neosyntropy.com"
+
+
+class Client:
+    """Project-scoped NeoSyntropy client for application code.
+
+    Developers only supply an API key and project id. Pass this to
+    :meth:`FSM.run` — control / SLM plumbing stays inside the framework.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        project_id: str,
+        base_url: str = DEFAULT_API_URL,
+        timeout: float = 30.0,
+        telemetry_timeout: float = 2.0,
+    ) -> None:
+        if not api_key:
+            raise ValueError("api_key is required")
+        if not project_id:
+            raise ValueError("project_id is required")
+        self.api_key = api_key
+        self.project_id = project_id
+        self.base_url = base_url
+        self._backend = BackendClient(
+            base_url,
+            api_key=api_key,
+            project_id=project_id,
+            timeout=timeout,
+            telemetry_timeout=telemetry_timeout,
+        )
+
+    def _as_backend(self) -> BackendClient:
+        return self._backend
+
+
 class BackendClient:
     """Authenticated client whose requests never name a model or provider."""
 

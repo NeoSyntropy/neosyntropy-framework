@@ -19,7 +19,7 @@ from neosyntropy import (
     OpenInput,
     ControlManager,
     EmptyOutput,
-    Graph,
+    FSM,
     Group,
     RunRequest,
     edge_deterministic,
@@ -38,7 +38,7 @@ SPECIALIST = "special.Review"  # semantic node target (not a group)
 FALLBACK = "desk.OutOfScope"
 
 
-def build_routing_graph() -> Graph:
+def build_routing_graph() -> FSM:
     @node(id=INTAKE_A, group="intake", input_schema=OpenInput, output_schema=EmptyOutput)
     def intake_alpha(ctx):
         """Intake for alpha-class requests."""
@@ -64,7 +64,7 @@ def build_routing_graph() -> Graph:
         """Safe stop."""
         return ctx.result(output={}, status="fallback")
 
-    return Graph(
+    return FSM(
         nodes=[
             intake_alpha,
             intake_beta,

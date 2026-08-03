@@ -31,7 +31,7 @@ from neosyntropy import (
 
     ControlManager,
 
-    Graph,
+    FSM,
 
     Group,
 
@@ -185,11 +185,11 @@ def out_of_scope(ctx):
 
 
 
-# --- Graph (the single source of permission) ----------------------------------
+# --- FSM (the single source of permission) ----------------------------------
 
 
 
-graph = Graph(
+graph = FSM(
 
     nodes=[verify_identity, calculate_refund, issue_refund, out_of_scope],
 

@@ -9,7 +9,7 @@ Core primitives:
 |---|---|
 | `Node` | Executable capability (handler or provider-backed), never a workflow position |
 | `Edge` | One permitted movement: `deterministic`, `semantic`, or `fallback` |
-| `Group` | Organization for nodes; semantic edges may target a group to scope the router |
+| `Group` | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
 | `ControlManager` | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit → audit |
 
 ## Install
@@ -74,7 +74,7 @@ neosyntropy logout
 ## Quickstart
 
 ```python
-from neosyntropy import BackendClient, ControlManager, Edge, Graph, EmptyOutput, TextOutput, node
+from neosyntropy import Client, EmptyOutput, TextOutput, Workflow, node
 
 @node(id="VerifyIdentity", output_schema=EmptyOutput)
 def verify_identity(ctx):
@@ -89,27 +89,18 @@ def issue_refund(ctx):
 def out_of_scope(ctx):
     return ctx.result(output={"message": "Out of scope for this workflow."})
 
-graph = Graph(
-    nodes=[verify_identity, issue_refund, out_of_scope],
-    edges=[
-        Edge(source="Start", target="VerifyIdentity", kind="deterministic"),
-        Edge(source="VerifyIdentity", target="IssueRefund", kind="deterministic"),
-        Edge(source="IssueRefund", target="End", kind="deterministic"),
-        Edge(source="Start", target="OutOfScope", kind="fallback"),
-    ],
+fsm = Workflow(
+    [verify_identity, issue_refund],
+    fallback=out_of_scope,
 )
 
-backend = BackendClient(
-    "https://api.neosyntropy.com",
-    api_key="your-api-key",
-    project_id="your-project-id",
-)
-manager = ControlManager(graph, backend=backend)
-result = manager.run({"intent": "refund my order", "current_state": "Start"})
+client = Client(api_key="your-api-key", project_id="your-project-id")
+result = fsm.run({"intent": "refund my order", "current_state": "Start"}, client=client)
 
 print(result.final_state)                    # one committed transition
 print(result.audit.committed_transitions)    # ["Start->VerifyIdentity"]
 ```
+
 
 Every cycle returns a `RunResult` with a full `AuditRecord`: the proposed
 plan, the candidates, every gate check, and the committed transitions. A
@@ -130,7 +121,7 @@ class RefundRequest(BaseModel):
     order_id: str
     currency: str = "USD"
 
-graph = Graph(nodes=[...], edges=[...], input_schema=RefundRequest)
+graph = FSM(nodes=[...], edges=[...], input_schema=RefundRequest)
 ```
 
 Fields with defaults stay optional and unknown keys are refused, so no caller
@@ -152,9 +143,18 @@ include topology, candidates, execution plans, providers, or model names.
 - **Backend control** (default with credentials): `POST /control/runs` +
   `POST /control/runs/{id}/results`. The SDK loops: receive opaque execute
   steps → run local handlers → submit results → accept commits/rejections.
-- **`DeterministicRouter`** (offline fallback, no backend): takes exactly one
-  matching deterministic edge, else a unique semantic target, else the
-  fallback edge.
+- **Authoring routers** (instead of hand-written edges):
+  `DeterministicRouter(id, rules=[(predicate, target), ...])` and
+  `SemanticRouter(id, routes={label: group_or_node}, fallback_node=...)`.
+  Pass them to `FSM(..., routers=[...], entry=auth_router)`.
+- **Authoring groups** (subgraph that compiles into the FSM):
+  `@billing.node(...)`, `billing.routers = [...]`, `billing.entry = "ValidateCard"`,
+  `billing.add_edge("ValidateCard", "BillingLogic")`. Pass `groups=[billing]`
+  (or target the group from a `SemanticRouter`); nodes, routers, and edges
+  merge into the parent graph. With `entry` set, a semantic edge to the group
+  lands on that entry node.
+- **`PreferredPathRouter`** (offline runtime): takes exactly one matching
+  deterministic edge, else a unique semantic target, else the fallback edge.
 - Node generation for handler-less nodes may still use `/framework/slm`;
   selection/routing stay behind the control API.
 
@@ -220,21 +220,39 @@ enforces the node's allow-list fail-closed and logs every invocation.
 
 ### Model-driven tool calling
 
-A node with no Python handler runs through the NeoSyntropy backend. If it
-declares tools, the framework runs the split reasoning/extraction loop:
+Provider-backed nodes use explicit constructors. A reasoning node may call
+tools; a schema node returns constrained JSON; a combine node expands into
+reasoning then schema FSM states:
 
 ```python
-Node(
+ReasoningNode(
     id="Support",
+    input_schema=OpenInput,
     prompt="Help the customer with their order.",
     tools=("lookup_order",),
 )
+
+SchemaNode(
+    id="Ticket",
+    input_schema=OpenInput,
+    output_schema=SupportTicket,
+    prompt="Extract a support ticket as JSON.",
+)
+
+CombineNode(
+    id="Clearance",
+    input_schema=OpenInput,
+    tools=("lookup_order",),
+    output_schema=SupportTicket,
+    prompt="Gather evidence, then extract a ticket.",
+)
 ```
 
-The model reasons, emits `<TOOL:lookup_order>` with no arguments, a parameter
-extractor fills a JSON object constrained by the tool's pydantic schema,
-arguments are validated before the tool runs, and the outcome is reinjected so
-reasoning continues. Only the node's own tools appear in its prompt.
+Python handlers stay on `@node`. The model reasons, emits `<TOOL:lookup_order>`
+with no arguments, a parameter extractor fills a JSON object constrained by the
+tool's pydantic schema, arguments are validated before the tool runs, and the
+outcome is reinjected so reasoning continues. Only the node's own tools appear
+in its prompt.
 
 The default extractor uses the same provider; plug a trained edge extractor in
 with `ControlManager(graph, extractor=my_extractor)` — anything implementing

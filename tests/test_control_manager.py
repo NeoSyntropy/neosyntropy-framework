@@ -5,7 +5,7 @@ import json
 from neosyntropy import (
     ControlManager,
     Edge,
-    Graph,
+    FSM,
     JsonlDecisionLogger,
     OpenInput,
     RunRequest,
@@ -69,7 +69,7 @@ def test_illegal_plan_is_rejected_before_execution():
     # Semantic scope from Start so the (misbehaving) router is consulted;
     # deterministic short-circuit would otherwise skip it.
     base = build_graph()
-    graph = Graph(
+    graph = FSM(
         nodes=list(base.nodes.values()),
         edges=[
             Edge(source="Start", target="VerifyIdentity", kind="semantic"),
@@ -98,7 +98,7 @@ def test_fallback_cycle_is_a_safe_stop(refund_graph):
     assert result.audit.committed_transitions == []
 
 
-def _entry_guarded_graph() -> Graph:
+def _entry_guarded_graph() -> FSM:
     from pydantic import BaseModel, ConfigDict
 
     class RefundInput(BaseModel):
@@ -167,7 +167,7 @@ def test_node_input_schema_rejects_before_execution():
     def safe(ctx):
         return ctx.result(output={"message": "stop"})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[needs_state, safe],
         edges=[Edge(source="Start", target="NeedsState", kind="deterministic")],
         validate_reachability=False,
@@ -200,7 +200,7 @@ def test_node_input_schema_allows_matching_state():
     def safe(ctx):
         return ctx.result(output={"message": "stop"})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[needs_state, safe],
         edges=[Edge(source="Start", target="NeedsState", kind="deterministic")],
         validate_reachability=False,
@@ -232,7 +232,7 @@ def test_handler_proposed_illegal_transition_is_rejected():
     def safe(ctx):
         return ctx.result(output={"message": "stop"})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[rogue, safe],
         edges=[Edge(source="Start", target="Rogue", kind="deterministic")],
         validate_reachability=False,
@@ -245,7 +245,7 @@ def test_handler_proposed_illegal_transition_is_rejected():
     assert result.state == {}
 
 
-def _guarded_graph(*, with_semantic: bool = False) -> Graph:
+def _guarded_graph(*, with_semantic: bool = False) -> FSM:
     graph = build_graph()
     # Rebuild with a guard that requires a positive refund amount.
     edges = [
@@ -268,7 +268,7 @@ def _guarded_graph(*, with_semantic: bool = False) -> Graph:
                 kind="semantic",
             )
         )
-    return Graph(nodes=list(graph.nodes.values()), edges=edges)
+    return FSM(nodes=list(graph.nodes.values()), edges=edges)
 
 
 def _zero_refund_request():
@@ -325,7 +325,7 @@ def test_tool_allow_list_violation_is_a_rejection():
     def safe(ctx):
         return ctx.result(output={"message": "stop"})
 
-    graph = Graph(
+    graph = FSM(
         nodes=[sneaky, safe],
         edges=[Edge(source="Start", target="Sneaky", kind="deterministic")],
         validate_reachability=False,

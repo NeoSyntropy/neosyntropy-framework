@@ -8,7 +8,7 @@ from neosyntropy import (
     BackendProvider,
     Candidate,
     RunContext,
-    SemanticRouter,
+    BackendSemanticRouter,
     Topology,
 )
 
@@ -50,7 +50,7 @@ def test_backend_adapters_do_not_accept_provider_or_model() -> None:
         for node in graph.nodes.values()
     ]
 
-    plan = asyncio.run(SemanticRouter(client).route(context, candidates))
+    plan = asyncio.run(BackendSemanticRouter(client).route(context, candidates))
     generated = asyncio.run(BackendProvider(client).generate("hello", schema={"type": "object"}))
 
     assert plan.execution_plan == [[0]]

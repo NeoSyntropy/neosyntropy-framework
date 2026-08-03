@@ -26,10 +26,10 @@ from typing import Any
 from ..backend import (
     BackendClient,
     BackendProvider,
+    Client,
 )
-from ..routing.semantic import SemanticRouter
 from ..core.context import ContextBuilder, RunContext
-from ..core.graph import START, Graph
+from ..core.graph import END, START, FSM
 from ..core.models import (
     AuditRecord,
     Candidate,
@@ -50,8 +50,9 @@ from ..observability import (
     graph_manifest,
 )
 from ..providers.base import Provider, ProviderRegistry
+from ..routing.backend_route import BackendSemanticRouter
 from ..routing.base import Router
-from ..routing.deterministic import DeterministicRouter
+from ..routing.preferred import PreferredPathRouter
 from ..tools.calling import ParameterExtractor
 from ..tools.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
@@ -62,11 +63,33 @@ from .validator import PlanValidationError, PlanValidator
 _MAX_ACTIONABLE_CANDIDATES = 9
 
 
+def _resolve_backend(
+    client: Client | BackendClient | None = None,
+    *,
+    backend: BackendClient | None = None,
+) -> BackendClient | None:
+    """Accept the public :class:`Client` or a low-level ``BackendClient``."""
+    if client is not None and backend is not None:
+        raise ValueError("pass client= or backend=, not both")
+    if isinstance(client, Client):
+        return client._as_backend()
+    if isinstance(client, BackendClient):
+        return client
+    if client is not None:
+        raise TypeError(
+            f"client must be Client or BackendClient; got {type(client)!r}"
+        )
+    if backend is not None:
+        return backend
+    return BackendClient.from_env()
+
+
 class ControlManager:
     def __init__(
         self,
-        graph: Graph,
+        graph: FSM,
         *,
+        client: Client | BackendClient | None = None,
         backend: BackendClient | None = None,
         router: Router | None = None,
         providers: ProviderRegistry | Mapping[str, Provider] | None = None,
@@ -81,7 +104,7 @@ class ControlManager:
         capture_payloads: bool = True,
     ):
         self.graph = graph
-        resolved_backend = backend if backend is not None else BackendClient.from_env()
+        resolved_backend = _resolve_backend(client, backend=backend)
         self._backend = resolved_backend
         backend_providers: dict[str, Provider] = {}
         if resolved_backend is not None:
@@ -104,9 +127,9 @@ class ControlManager:
         # When a backend is configured, ControlManager uses the opaque
         # /control/runs API. Local router remains an offline fallback.
         self.router = router or (
-            SemanticRouter(resolved_backend)
+            BackendSemanticRouter(resolved_backend)
             if resolved_backend is not None
-            else DeterministicRouter(graph)
+            else PreferredPathRouter(graph)
         )
         self.validator = validator or PlanValidator()
         self.executor = executor or TopologyExecutor(
@@ -461,6 +484,32 @@ class ControlManager:
         run_id: str | None,
         initial_checks: list[GateCheck] | None = None,
     ) -> RunResult:
+        # Router / End hop: exactly one deterministic edge to a non-executable
+        # state (compiled router id or End) — commit the transition only.
+        hop = self._deterministic_hop_target(context)
+        if hop is not None:
+            checks = list(initial_checks or [])
+            checks.append(
+                GateCheck(
+                    name="RouterHop",
+                    stage="result",
+                    passed=True,
+                    message=f"{context.current_state!r} -> {hop!r}",
+                )
+            )
+            return self._result(
+                context,
+                None,
+                [],
+                [],
+                hop,
+                dict(context.state),
+                checks,
+                completed=(hop == END),
+                rejection=None,
+                committed=[f"{context.current_state}->{hop}"],
+            )
+
         # Deterministic short-circuit: exactly one matching edge commits
         # without the semantic router.
         short_circuit = self._deterministic_plan(context)
@@ -603,6 +652,24 @@ class ControlManager:
                     ),
                 )
                 break
+
+            # After a single node finishes without next_state, follow a unique
+            # deterministic edge to a router or End (group add_edge / terminals).
+            if merged_next is None and len(step_targets) == 1:
+                only = next(iter(step_targets))
+                matching = self.graph.matching_deterministic(only, preview_state)
+                if len(matching) == 1:
+                    auto_target = matching[0].target
+                    if auto_target == END or self.graph.is_router_state(auto_target):
+                        results = [
+                            (
+                                result.model_copy(update={"next_state": auto_target})
+                                if result.next_state is None
+                                else result
+                            )
+                            for result in results
+                        ]
+                        preview_state, merged_next = state_manager.preview(results)
 
             step_checks = self._result_stage_checks(
                 context, results, preview_state, state_manager.current_state
@@ -901,31 +968,38 @@ class ControlManager:
 
     # -- helpers -------------------------------------------------------------
 
-    def _deterministic_plan(
-        self, context: RunContext
-    ) -> tuple[list[Candidate], RoutingPlan] | None:
-        """Return a plan when exactly one deterministic edge matches."""
+    def _deterministic_hop_target(self, context: RunContext) -> str | None:
+        """Target id when the only matching edge is a router state or End."""
         matching = self.graph.matching_deterministic(
             context.current_state, context.state
         )
         if len(matching) != 1:
             return None
         target_id = matching[0].target
-        if target_id not in self.graph.nodes and target_id not in {"Start", "End"}:
+        if target_id == END or self.graph.is_router_state(target_id):
+            return target_id
+        return None
+
+    def _deterministic_plan(
+        self, context: RunContext
+    ) -> tuple[list[Candidate], RoutingPlan] | None:
+        """Return a plan when exactly one deterministic edge matches a node."""
+        matching = self.graph.matching_deterministic(
+            context.current_state, context.state
+        )
+        if len(matching) != 1:
             return None
-        if target_id in self.graph.nodes:
-            definition = self.graph.nodes[target_id]
-            target = Candidate(
-                node_id=definition.id,
-                name=definition.name,
-                description=definition.description,
-                prerequisites=definition.prerequisites,
-                is_fallback=definition.is_fallback,
-            )
-        else:
-            # Transition toward End/Start — represent as a synthetic candidate
-            # so the validator/executor can still see a sequential plan tip.
+        target_id = matching[0].target
+        if target_id not in self.graph.nodes:
             return None
+        definition = self.graph.nodes[target_id]
+        target = Candidate(
+            node_id=definition.id,
+            name=definition.name,
+            description=definition.description,
+            prerequisites=definition.prerequisites,
+            is_fallback=definition.is_fallback,
+        )
         fallback = self.graph.fallback_node
         candidates = [
             target,

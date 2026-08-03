@@ -11,7 +11,7 @@ from neosyntropy import (
 
     EmptyOutput,
 
-    Graph,
+    FSM,
 
     TextOutput,
 
@@ -105,9 +105,9 @@ def out_of_scope(ctx):
 
 
 
-def build_graph(**kwargs) -> Graph:
+def build_graph(**kwargs) -> FSM:
 
-    return Graph(
+    return FSM(
 
         nodes=[verify_identity, calculate_refund, issue_refund, out_of_scope],
 
@@ -135,7 +135,7 @@ def build_graph(**kwargs) -> Graph:
 
 @pytest.fixture
 
-def refund_graph() -> Graph:
+def refund_graph() -> FSM:
 
     return build_graph()
 

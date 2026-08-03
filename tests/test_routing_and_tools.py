@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from neosyntropy import (
     Candidate,
-    DeterministicRouter,
+    PreferredPathRouter,
     RunContext,
     ToolNotAllowedError,
     ToolRegistry,
@@ -43,7 +43,7 @@ def make_candidates(graph) -> list[Candidate]:
 def test_deterministic_router_follows_edge_priority():
     graph = build_graph()
     candidates = make_candidates(graph)
-    plan = _route(DeterministicRouter(graph), make_context("Start"), candidates)
+    plan = _route(PreferredPathRouter(graph), make_context("Start"), candidates)
     assert plan.topology == Topology.SEQUENTIAL
     chosen = candidates[plan.execution_plan[0][0]]
     assert chosen.node_id == "VerifyIdentity"
@@ -52,7 +52,7 @@ def test_deterministic_router_follows_edge_priority():
 def test_deterministic_router_falls_back_when_nothing_is_legal():
     graph = build_graph()
     candidates = make_candidates(graph)
-    plan = _route(DeterministicRouter(graph), make_context("End"), candidates)
+    plan = _route(PreferredPathRouter(graph), make_context("End"), candidates)
     assert plan.topology == Topology.FALLBACK
     assert candidates[plan.execution_plan[0][0]].is_fallback
 

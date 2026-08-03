@@ -88,7 +88,7 @@
               "code": {
                 "label": "Python",
                 "language": "python",
-                "code": "from neosyntropy import BackendClient, ControlManager, Edge, Graph, EmptyOutput, TextOutput, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    \"\"\"Verify the requester owns the order.\"\"\"\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"IssueRefund\", prerequisites=(\"VerifyIdentity\",))\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"Out of scope for this workflow.\")\n\n\ngraph = Graph(\n    nodes=[verify_identity, issue_refund, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"IssueRefund\", label=\"next\"),\n        Edge(source=\"IssueRefund\", target=\"End\", label=\"complete\"),\n    ],\n    )\n\nbackend = BackendClient.from_env()\nmanager = ControlManager(graph, backend=backend)\nresult = manager.run({\"intent\": \"refund my order\", \"current_state\": \"Start\"})\n\nprint(result.final_state)\nprint(result.audit.committed_transitions)"
+                "code": "from neosyntropy import BackendClient, ControlManager, Edge, FSM, EmptyOutput, TextOutput, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    \"\"\"Verify the requester owns the order.\"\"\"\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"IssueRefund\", prerequisites=(\"VerifyIdentity\",))\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"Out of scope for this workflow.\")\n\n\ngraph = FSM(\n    nodes=[verify_identity, issue_refund, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"IssueRefund\", label=\"next\"),\n        Edge(source=\"IssueRefund\", target=\"End\", label=\"complete\"),\n    ],\n    )\n\nbackend = BackendClient.from_env()\nmanager = ControlManager(graph, backend=backend)\nresult = manager.run({\"intent\": \"refund my order\", \"current_state\": \"Start\"})\n\nprint(result.final_state)\nprint(result.audit.committed_transitions)"
               },
               "paragraphs": [
                 "ControlManager discovers credentials from the environment when backend is omitted. Every cycle returns a RunResult with an AuditRecord of proposals, gate checks, and committed transitions."
@@ -144,7 +144,7 @@
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import ControlManager, Graph\n\nmanager = ControlManager(graph)  # BackendClient.from_env() when credentials exist\nresult = manager.run({\n    \"intent\": \"verify the customer and review refund eligibility\",\n    \"current_state\": \"Start\",\n    \"state\": {\"order_id\": \"ord_123\"},\n})\n\nprint(result.final_state)\nprint(result.completed)\nprint(result.rejected)"
+                "code": "from neosyntropy import ControlManager, FSM\n\nmanager = ControlManager(graph)  # BackendClient.from_env() when credentials exist\nresult = manager.run({\n    \"intent\": \"verify the customer and review refund eligibility\",\n    \"current_state\": \"Start\",\n    \"state\": {\"order_id\": \"ord_123\"},\n})\n\nprint(result.final_state)\nprint(result.completed)\nprint(result.rejected)"
               }
             }
           ],
@@ -175,7 +175,7 @@
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import Graph, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"CheckEligibility\", prerequisites=(\"VerifyIdentity\",))\ndef check_eligibility(ctx):\n    return ctx.result(state_updates={\"eligible\": True})\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"No actionable path.\")\n\ngraph = Graph(nodes=[verify_identity, check_eligibility, out_of_scope], edges=[...])"
+                "code": "from neosyntropy import FSM, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"CheckEligibility\", prerequisites=(\"VerifyIdentity\",))\ndef check_eligibility(ctx):\n    return ctx.result(state_updates={\"eligible\": True})\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"No actionable path.\")\n\ngraph = FSM(nodes=[verify_identity, check_eligibility, out_of_scope], edges=[...])"
               }
             },
             {
@@ -192,23 +192,23 @@
           "navTitle": "Groups",
           "eyebrow": "Core concepts",
           "title": "Groups organize nodes",
-          "description": "A group is a named collection of nodes. Selection still ranks individual nodes; ControlManager still owns routing, validation, and state.",
+          "description": "A group is a named collection of nodes. It can also author an internal subgraph (nodes, routers, entry, edges) that compiles into the parent FSM. ControlManager still owns routing, validation, and state.",
           "sections": [
             {
               "id": "definition",
-              "title": "Organization, not control",
+              "title": "Organization, with optional authored flow",
               "paragraphs": [
-                "Groups name collections of nodes for organization and candidate metadata. The validator and executor never consult groups.",
-                "Grouping must not create a second control path — one pipeline owns the sequence end to end."
+                "Groups name collections of nodes for organization and candidate metadata. A semantic edge may target a group to scope routing; when entry is set, entering the group lands on that entry state.",
+                "Authoring helpers (@group.node, routers, entry, add_edge) compile into the parent FSM. They do not create a second control path — one pipeline owns the sequence end to end."
               ]
             },
             {
               "id": "sdk-example",
-              "title": "Assign a group on the node",
+              "title": "Author a group subgraph",
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import node\n\n@node(id=\"IssueRefund\", group=\"billing\")\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")"
+                "code": "from neosyntropy import DeterministicRouter, EmptyOutput, Group, OpenInput, SemanticRouter\n\nbilling = Group(name=\"billing\")\n\n@billing.node(id=\"ValidateCard\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef validate(ctx):\n    return ctx.result(output={}, state_updates={\"card_valid\": True})\n\n@billing.node(id=\"ProcessPayment\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef pay(ctx):\n    return ctx.result(output={})\n\n@billing.node(id=\"SendReceipt\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef receipt(ctx):\n    return ctx.result(output={}, next_state=\"End\")\n\ninternal_logic = DeterministicRouter(\n    id=\"BillingLogic\",\n    rules=[\n        (lambda ctx: ctx.state.get(\"card_valid\") is True, \"ProcessPayment\"),\n        (lambda ctx: ctx.state.get(\"card_valid\") is False, \"RejectCard\"),\n    ],\n)\npost_pay = SemanticRouter(\n    id=\"PostPayIntent\",\n    routes={\"wants_receipt\": \"SendReceipt\", \"wants_refund\": \"ProcessRefund\"},\n)\nbilling.routers = [internal_logic, post_pay]\nbilling.entry = \"ValidateCard\"\nbilling.add_edge(\"ValidateCard\", \"BillingLogic\")\nbilling.add_edge(\"ProcessPayment\", \"PostPayIntent\")"
               },
               "callout": {
                 "title": "See Control manager",
@@ -234,7 +234,7 @@
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import Edge, Graph, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result()\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result()\n\ngraph = Graph(\n    nodes=[verify_identity, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"End\", label=\"complete\"),\n    ],\n)\n\nprint(graph.allows(\"Start\", \"VerifyIdentity\"))  # True"
+                "code": "from neosyntropy import Edge, FSM, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result()\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result()\n\ngraph = FSM(\n    nodes=[verify_identity, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"End\", label=\"complete\"),\n    ],\n)\n\nprint(graph.allows(\"Start\", \"VerifyIdentity\"))  # True"
               }
             },
             {

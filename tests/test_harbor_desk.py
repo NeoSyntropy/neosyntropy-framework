@@ -8,13 +8,14 @@ import pytest
 from neosyntropy import (
     OpenInput,
     ControlManager,
-    Node,
+    REASONING_OUTPUT_SCHEMA,
+    SchemaNode,
     RoutingPlan,
     RunRequest,
     Topology,
     graph_manifest,
 )
-from neosyntropy.routing.deterministic import DeterministicRouter
+from neosyntropy.routing.preferred import PreferredPathRouter
 
 from .harbor_desk import (
     BERTH_CLEARANCE,
@@ -24,7 +25,6 @@ from .harbor_desk import (
     FALLBACK,
     PILOT_ADVISORY,
     PILOT_BRIEF,
-    REASONING_OUTPUT_SCHEMA,
     build_harbor_graph,
     build_harbor_tools,
     harbor_manifest,
@@ -36,7 +36,7 @@ class PreferFirstRouter:
 
     def __init__(self, graph, first_node_id: str):
         self.first_node_id = first_node_id
-        self._inner = DeterministicRouter(graph)
+        self._inner = PreferredPathRouter(graph)
         self._used = False
 
     async def route(self, context, candidates):
@@ -89,13 +89,25 @@ def test_schema_extraction_nodes_forbid_tools(graph):
 
 
 def test_schema_extraction_cannot_declare_tools():
+    from neosyntropy import Node
+
     with pytest.raises(Exception, match="schema_extraction.*cannot declare tools"):
         Node(
             id="broken.Extract",
             mode="schema_extraction",
             tools=("lookup_slip",),
-            input_schema=OpenInput, output_schema=REASONING_OUTPUT_SCHEMA,
+            input_schema=OpenInput,
+            output_schema=REASONING_OUTPUT_SCHEMA,
         )
+    # SchemaNode has no tools parameter — use ReasoningNode / CombineNode instead.
+    schema = SchemaNode(
+        id="ok.Extract",
+        input_schema=OpenInput,
+        output_schema=REASONING_OUTPUT_SCHEMA,
+        prompt="extract",
+    )
+    assert schema.mode == "schema_extraction"
+    assert schema.tools == ()
 
 
 def test_groups_pair_reasoning_then_extraction(graph):

@@ -6,7 +6,7 @@ hard gate between proposal and execution: a plan that fails here never runs.
 from __future__ import annotations
 
 from ..core.context import RunContext
-from ..core.graph import Graph
+from ..core.graph import FSM
 from ..core.models import Candidate, RoutingPlan, Topology
 
 
@@ -21,7 +21,7 @@ class PlanValidator:
         self,
         plan: RoutingPlan,
         candidates: list[Candidate],
-        graph: Graph,
+        graph: FSM,
         context: RunContext,
     ) -> None:
         errors: list[str] = []
@@ -120,7 +120,7 @@ class PlanValidator:
     def _validate_transitions(
         plan: RoutingPlan,
         candidates: list[Candidate],
-        graph: Graph,
+        graph: FSM,
         context: RunContext,
         errors: list[str],
     ) -> None:

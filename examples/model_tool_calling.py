@@ -21,9 +21,10 @@ from neosyntropy import (
     OpenInput,
     ControlManager,
     Edge,
-    Graph,
-    Node,
+    FSM,
+    ReasoningNode,
     RunRequest,
+    SchemaNode,
     TextOutput,
     ToolRegistry,
     tool,
@@ -70,21 +71,27 @@ class ScriptedProvider:
         return self.replies.pop(0) if self.replies else "Anything else?"
 
 
-# --- Graph: tools are granted per node, and the node prompt shows only those --
+# --- FSM: tools are granted per node, and the node prompt shows only those --
 
 
-def build_graph() -> Graph:
-    return Graph(
+def build_graph() -> FSM:
+    return FSM(
         nodes=[
-            Node(
+            ReasoningNode(
                 id="Support",
                 description="Answer order questions",
                 provider="slm",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
-                input_schema=OpenInput, output_schema=TextOutput,
+                input_schema=OpenInput,
             ),
-            Node(id="OutOfScope", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput),
+            SchemaNode(
+                id="OutOfScope",
+                is_fallback=True,
+                input_schema=OpenInput,
+                output_schema=TextOutput,
+                prompt="Politely refuse out-of-scope requests.",
+            ),
         ],
         edges=[
             Edge(source="Start", target="Support", kind="deterministic"),

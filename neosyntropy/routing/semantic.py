@@ -1,36 +1,14 @@
-"""Semantic router: proposes plans via the NeoSyntropy backend.
+"""Semantic routing.
 
-Prompt assembly, constrained-decoding schema, and the trained 10-slot wire
-contract live in the backend. This adapter only forwards context + candidates.
+Developer API: :class:`SemanticRouter` declarations (labeled routes → nodes/groups).
+Runtime backend adapter: :class:`BackendSemanticRouter`.
 """
 from __future__ import annotations
 
-from typing import Protocol
+from .backend_route import BackendSemanticRouter
+from .declarations import SemanticRouter
 
-from ..core.context import RunContext
-from ..core.models import Candidate, RoutingPlan
-
-
-class _RouteClient(Protocol):
-    async def route(
-        self,
-        context: RunContext,
-        candidates: list[Candidate],
-        *,
-        category: str = "general",
-    ) -> RoutingPlan: ...
-
-
-class SemanticRouter:
-    """Routes via the backend-owned semantic router service."""
-
-    def __init__(self, client: _RouteClient, *, category: str = "general") -> None:
-        self.client = client
-        self.category = category
-
-    async def route(
-        self, context: RunContext, candidates: list[Candidate]
-    ) -> RoutingPlan:
-        return await self.client.route(
-            context, candidates, category=self.category
-        )
+__all__ = [
+    "SemanticRouter",
+    "BackendSemanticRouter",
+]
