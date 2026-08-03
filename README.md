@@ -31,6 +31,15 @@ Site docs:
 [Groups](https://docs.neosyntropy.com/concepts/groups) ·
 [Control manager](https://docs.neosyntropy.com/concepts/control-manager)
 
+## Sign up
+
+Create an account at [neosyntropy.com](https://neosyntropy.com) to use the
+control plane. New accounts include **100 free node passes** so you can run
+workflows before buying credits. Paid usage starts at **$0.005 per node**
+(minimum); the starter package is **$10 for 1,000 state transitions**. After
+sign-in, create a project and copy your API key + project id for the client
+below (or use `neosyntropy login`).
+
 ## Install
 
 ```bash
@@ -47,8 +56,9 @@ pip install -e ".[dev]"   # with pytest + ruff + build tools
 ## CLI login and projects
 
 Installing the package also installs the `neosyntropy` command, while preserving
-the normal Python import API. Connect a terminal through your existing browser
-session, then create or select a project:
+the normal Python import API. Sign in at [neosyntropy.com](https://neosyntropy.com)
+first, then connect a terminal through that browser session and create or select
+a project:
 
 ```bash
 neosyntropy login
