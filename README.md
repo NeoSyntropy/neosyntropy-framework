@@ -14,10 +14,10 @@ proposal inside a fail-closed graph.
 | [`ReasoningNode`](docs/concepts.md#reasoningnode--tools--notes) | Provider-backed reasoning: a small model may call allow-listed tools and write plain-text notes |
 | [`CombineNode`](docs/concepts.md#combinenode--reasoning-then-schema) | Authoring unit that expands to reasoning → schema FSM states |
 | [`Node`](docs/concepts.md#node--executable-capability) | Executable capability (Python handler or provider-backed), never a workflow position |
-| [`Edge`](docs/concepts.md#edge--one-permitted-movement) | One permitted movement: `deterministic`, `semantic`, or `fallback` |
-| [`Group`](docs/concepts.md#group--organization-and-optional-authored-subgraph) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
 | [`DeterministicRouter`](docs/concepts.md#deterministicrouter--hard-rules) | First matching `(predicate, target)` rule wins; compiles to deterministic edges |
 | [`SemanticRouter`](docs/concepts.md#semanticrouter--labeled-intent-routes) | Model picks among labeled targets (`routes={label: node_or_group}`); still validated against the graph |
+| [`Edge`](docs/concepts.md#edge--one-permitted-movement) | One permitted movement: `deterministic`, `semantic`, or `fallback` |
+| [`Group`](docs/concepts.md#group--organization-and-optional-authored-subgraph) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
 | [`ControlManager`](docs/concepts.md#controlmanager--the-pipeline-as-one-object) | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit |
 
 Site docs (synced from [`docs/site/framework-docs.json`](docs/site/framework-docs.json)):
@@ -40,29 +40,6 @@ From a local checkout:
 pip install -e .          # editable install
 pip install -e ".[dev]"   # with pytest + ruff + build tools
 ```
-
-### Publish a release to PyPI
-
-Publishing is automated by `.github/workflows/publish.yml` (tests → build → upload).
-
-One-time PyPI setup (Trusted Publishing, no API token):
-
-1. Create a GitHub Environment named `pypi` on this repo (Settings → Environments).
-2. On [PyPI publishing settings](https://pypi.org/manage/account/publishing/), add a **pending publisher**:
-   - Project name: `neosyntropy`
-   - Owner: `NeoSyntropy`
-   - Repository: `neosyntropy-framework`
-   - Workflow: `publish.yml`
-   - Environment name: `pypi`
-
-Then bump `version` in `pyproject.toml`, commit, tag, and push:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Pushing a `v*` tag (or publishing a GitHub Release) runs the workflow and uploads to PyPI.
 
 ## CLI login and projects
 
@@ -241,27 +218,145 @@ tools; a schema node returns constrained JSON; a combine node expands into
 reasoning then schema FSM states:
 
 ```python
-ReasoningNode(
-    id="Support",
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+
+from neosyntropy import (
+    Client,
+    CombineNode,
+    DeterministicRouter,
+    Edge,
+    EmptyOutput,
+    FSM,
+    Group,
+    OpenInput,
+    ReasoningNode,
+    SchemaNode,
+    SemanticRouter,
+    TextOutput,
+    ToolRegistry,
+    node,
+    tool,
+)
+
+registry = ToolRegistry()
+
+
+class LookupOrderArgs(BaseModel):
+    order_id: str
+
+
+@tool(registry=registry)
+def lookup_order(args: LookupOrderArgs) -> dict:
+    """Return order amount and refund eligibility flags."""
+    return {
+        "order_id": args.order_id,
+        "amount": 120.0,
+        "within_window": True,
+        "already_refunded": False,
+    }
+
+
+class SupportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str
+    token_valid: bool = False
+
+
+class OrderStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str
+    status: str
+    amount: float
+
+
+# --- Groups -----------------------------------------------------------------
+
+refunds = Group(name="refunds", description="Refund investigation and payout")
+
+
+@refunds.node(id="IssueRefund", input_schema=OpenInput, output_schema=EmptyOutput)
+def issue_refund(ctx):
+    return ctx.result(
+        output={},
+        state_updates={"refund_issued": True},
+        next_state="End",
+    )
+
+
+@refunds.node(id="DenyRefund", input_schema=OpenInput, output_schema=TextOutput)
+def deny_refund(ctx):
+    return ctx.result(
+        output={"message": "Refund not allowed for this order."},
+        next_state="End",
+    )
+
+
+# Model gathers evidence with allow-listed tools (notes only — not free-form state).
+investigate = ReasoningNode(
+    id="InvestigateRefund",
+    group="refunds",
     input_schema=OpenInput,
-    prompt="Help the customer with their order.",
+    prompt=(
+        "Look up the order. Note whether it is within the refund window and "
+        "whether it was already refunded. Call lookup_order when you need data."
+    ),
     tools=("lookup_order",),
 )
 
-SchemaNode(
-    id="Ticket",
-    input_schema=OpenInput,
-    output_schema=SupportTicket,
-    prompt="Extract a support ticket as JSON.",
+# After reasoning, hard rules decide the payout path.
+refund_logic = DeterministicRouter(
+    id="RefundLogic",
+    rules=[
+        (
+            lambda ctx: (
+                ctx.state.get("within_window") is True
+                and ctx.state.get("already_refunded") is not True
+            ),
+            issue_refund,
+        ),
+        (lambda ctx: True, deny_refund),  # catch-all last
+    ],
 )
 
-CombineNode(
-    id="Clearance",
+refunds.routers = [refund_logic]
+refunds.entry = "InvestigateRefund"
+refunds.add_edge("InvestigateRefund", "RefundLogic")
+
+
+# Constrained JSON status extract (no tools).
+order_status = SchemaNode(
+    id="OrderStatus",
     input_schema=OpenInput,
-    tools=("lookup_order",),
-    output_schema=SupportTicket,
-    prompt="Gather evidence, then extract a ticket.",
+    output_schema=OrderStatusOut,
+    prompt="Extract the customer's order status as JSON.",
 )
+
+
+@node(id="Login", input_schema=OpenInput, output_schema=EmptyOutput)
+def login(ctx):
+    return ctx.result(
+        output={},
+        state_updates={"token_valid": True},
+        next_state="End",
+    )
+
+
+out_of_scope = SchemaNode(
+    id="OutOfScope",
+    is_fallback=True,
+    input_schema=OpenInput,
+    output_schema=TextOutput,
+    prompt="Politely refuse anything outside refunds or order status.",
+)
+
+
+# --- Routers ----------------------------------------------------------------
+
+# Model picks a labeled lane;
 ```
 
 Python handlers stay on `@node`. The model reasons, emits `<TOOL:lookup_order>`
