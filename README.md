@@ -10,17 +10,20 @@ proposal inside a fail-closed graph.
 
 | Primitive | Role |
 |---|---|
-| [`SchemaNode`](docs/concepts.md#schemanode--constrained-json) | Provider-backed extraction: a small model returns constrained JSON for `output_schema`, no tools |
-| [`ReasoningNode`](docs/concepts.md#reasoningnode--tools--notes) | Provider-backed reasoning: a small model may call allow-listed tools and write plain-text notes |
-| [`CombineNode`](docs/concepts.md#combinenode--reasoning-then-schema) | Authoring unit that expands to reasoning → schema FSM states |
-| [`Node`](docs/concepts.md#node--executable-capability) | Executable capability (Python handler or provider-backed), never a workflow position |
-| [`DeterministicRouter`](docs/concepts.md#deterministicrouter--hard-rules) | First matching `(predicate, target)` rule wins; compiles to deterministic edges |
-| [`SemanticRouter`](docs/concepts.md#semanticrouter--labeled-intent-routes) | Model picks among labeled targets (`routes={label: node_or_group}`); still validated against the graph |
-| [`Edge`](docs/concepts.md#edge--one-permitted-movement) | One permitted movement: `deterministic`, `semantic`, or `fallback` |
-| [`Group`](docs/concepts.md#group--organization-and-optional-authored-subgraph) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
-| [`ControlManager`](docs/concepts.md#controlmanager--the-pipeline-as-one-object) | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit |
+| [`SchemaNode`](docs/concepts-explained.md#3-schemanode--constrained-json-no-tools) | Provider-backed extraction: a small model returns constrained JSON for `output_schema`, no tools |
+| [`ReasoningNode`](docs/concepts-explained.md#4-reasoningnode--tools--plain-text-notes) | Provider-backed reasoning: a small model may call allow-listed tools and write plain-text notes |
+| [`CombineNode`](docs/concepts-explained.md#5-combinenode--reasoning-then-schema) | Authoring unit that expands to reasoning → schema FSM states |
+| [`Node`](docs/concepts-explained.md#2-node--node--executable-capability) | Executable capability (Python handler or provider-backed), never a workflow position |
+| [`DeterministicRouter`](docs/concepts-explained.md#7-deterministicrouter--hard-rules) | First matching `(predicate, target)` rule wins; compiles to deterministic edges |
+| [`SemanticRouter`](docs/concepts-explained.md#8-semanticrouter--labeled-intent-routes) | Model picks among labeled targets (`routes={label: node_or_group}`); still validated against the graph |
+| [`Edge`](docs/concepts-explained.md#6-edge--one-permitted-movement) | One permitted movement: `deterministic`, `semantic`, or `fallback` |
+| [`Group`](docs/concepts-explained.md#9-group--named-subgraph-optional) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
+| [`ControlManager`](docs/concepts-explained.md#11-controlmanager--one-control-cycle) | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit |
 
-Site docs (synced from [`docs/site/framework-docs.json`](docs/site/framework-docs.json)):
+Each concept explained (what / when / example):
+[`docs/concepts-explained.md`](docs/concepts-explained.md)
+
+Site docs:
 [Nodes](https://docs.neosyntropy.com/concepts/nodes) ·
 [Model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) ·
 [Routers](https://docs.neosyntropy.com/concepts/routers) ·
@@ -52,11 +55,6 @@ neosyntropy login
 neosyntropy project create "Support automation" --use
 neosyntropy project list
 ```
-
-`login` opens the browser for approval and keeps the refresh credential in the
-operating system keychain. Its configuration file contains only the API URL and
-selected project ID. Use `--api-url` for a self-hosted API and `--profile` for
-separate accounts:
 
 ```bash
 neosyntropy --api-url http://localhost:8000 --profile development login
@@ -94,308 +92,8 @@ print(result.final_state)                    # one committed transition
 print(result.audit.committed_transitions)    # ["Start->VerifyIdentity"]
 ```
 
-
-Every cycle returns a `RunResult` with a full `AuditRecord`: the proposed
-plan, the candidates, every gate check, and the committed transitions. A
-rejection (illegal plan, illegal transition, failed guard) is a
-normal outcome — `result.rejected` is set, nothing was committed for the
-offending step, and the audit explains why.
-
-### The entry contract
-
-A node declares what it returns; a graph declares what it takes in.
-`input_schema` documents and enforces the state a run must supply when it
-starts at `Start`:
-
-```python
-class RefundRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    order_id: str
-    currency: str = "USD"
-
-graph = FSM(nodes=[...], edges=[...], input_schema=RefundRequest)
-```
-
-Fields with defaults stay optional and unknown keys are refused, so no caller
-can smuggle state into the workflow. The check is the first gate of the cycle:
-input the graph never accepted is rejected before selection, routing, or any
-node runs, and the audit records it as an `InputSchema` check. Cycles that
-resume mid-workflow are not re-checked — that state is what the workflow
-itself produced. A pydantic model or a raw JSON Schema object both work, and
-the schema travels in `graph_manifest(graph)` so the console can show what the
-entry point expects.
-
-## Routing and control
-
-When backend credentials are configured, **the backend owns the control
-cycle**: candidate selection, routing, plan validation, and state commits.
-The client only defines the graph and executes local handlers. Responses never
-include topology, candidates, execution plans, providers, or model names.
-
-- **Backend control** (default with credentials): `POST /control/runs` +
-  `POST /control/runs/{id}/results`. The SDK loops: receive opaque execute
-  steps → run local handlers → submit results → accept commits/rejections.
-- **Authoring routers** (instead of hand-written edges):
-  `DeterministicRouter(id, rules=[(predicate, target), ...])` and
-  `SemanticRouter(id, routes={label: group_or_node}, fallback_node=...)`.
-  Pass them to `FSM(..., routers=[...], entry=auth_router)`.
-- **Authoring groups** (subgraph that compiles into the FSM):
-  `@billing.node(...)`, `billing.routers = [...]`, `billing.entry = "ValidateCard"`,
-  `billing.add_edge("ValidateCard", "BillingLogic")`. Pass `groups=[billing]`
-  (or target the group from a `SemanticRouter`); nodes, routers, and edges
-  merge into the parent graph. With `entry` set, a semantic edge to the group
-  lands on that entry node.
-- **`PreferredPathRouter`** (offline runtime): takes exactly one matching
-  deterministic edge, else a unique semantic target, else the fallback edge.
-- Node generation for handler-less nodes may still use `/framework/inference`;
-  selection/routing stay behind the control API.
-
-Set `NEOSYNTROPY_API_URL` with `NEOSYNTROPY_API_KEY` + `NEOSYNTROPY_PROJECT_ID`
-(or `NEOSYNTROPY_ACCESS_TOKEN`). `ControlManager(graph)` discovers them
-automatically.
-
-
-## Observability
-
-When a backend client is configured, `ControlManager` reports the control
-lifecycle to:
-
-- `POST /api/v1/telemetry/runs`
-- `POST /api/v1/telemetry/runs/{id}/events`
-- `POST /api/v1/telemetry/runs/{id}/finish`
-
-Telemetry is bounded and best-effort: an unavailable or slow observer never
-changes execution, validation, state commits, returned results, or raised
-execution errors. Events cover plan proposals, step start/completion,
-committed transitions, rejection/failure, and finish.
-
-By default the run's debug payloads are captured so the console can replay
-the FSM step by step (and the data can later feed training):
-
-- the run input (intent, initial state, state snapshot, history, metadata),
-- each step's input (`current_state` plus the pre-step state snapshot),
-- each step's output (node results, state updates, the post-step state, and
-  the rejection reason when a gate fails),
-- the run output (final state, final state snapshot, committed transitions).
-
-Oversized step payloads are truncated client-side so events are stored rather
-than dropped. Pass `ControlManager(graph, capture_payloads=False)` for
-sanitized lifecycle-only telemetry: then only a visualization manifest leaves
-the process (graph input schema, node IDs, display names, descriptions,
-prompts, modes, tool allow-list names, output schemas, groups, fallback
-markers, and typed edges) and handlers, guards, providers, metadata,
-request intent, history, state, outputs, and errors are excluded.
-
-Use `graph_manifest(graph)` to inspect the manifest payload or provide a
-custom `RunObserver` with `ControlManager(graph, observer=...)`. See
-[`examples/observability.py`](examples/observability.py).
-
-## Tools
-
-```python
-from pydantic import BaseModel
-from neosyntropy import tool
-
-class AddToCartArgs(BaseModel):
-    product_id: str
-    quantity: int
-
-@tool
-def add_to_cart(args: AddToCartArgs) -> dict:
-    """Add a quantity of a product to the active cart."""
-    ...
-```
-
-Tools are capabilities on nodes (`@node(..., tools=("add_to_cart",))`), never
-graph vertices. Handlers call them through `ctx.tools.invoke(...)`, which
-enforces the node's allow-list fail-closed and logs every invocation.
-
-### Model-driven tool calling
-
-Provider-backed nodes use explicit constructors. A reasoning node may call
-tools; a schema node returns constrained JSON; a combine node expands into
-reasoning then schema FSM states:
-
-```python
-from __future__ import annotations
-
-from pydantic import BaseModel, ConfigDict
-
-from neosyntropy import (
-    Client,
-    CombineNode,
-    DeterministicRouter,
-    Edge,
-    EmptyOutput,
-    FSM,
-    Group,
-    OpenInput,
-    ReasoningNode,
-    SchemaNode,
-    SemanticRouter,
-    TextOutput,
-    ToolRegistry,
-    node,
-    tool,
-)
-
-registry = ToolRegistry()
-
-
-class LookupOrderArgs(BaseModel):
-    order_id: str
-
-
-@tool(registry=registry)
-def lookup_order(args: LookupOrderArgs) -> dict:
-    """Return order amount and refund eligibility flags."""
-    return {
-        "order_id": args.order_id,
-        "amount": 120.0,
-        "within_window": True,
-        "already_refunded": False,
-    }
-
-
-class SupportRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    order_id: str
-    token_valid: bool = False
-
-
-class OrderStatusOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    order_id: str
-    status: str
-    amount: float
-
-
-# --- Groups -----------------------------------------------------------------
-
-refunds = Group(name="refunds", description="Refund investigation and payout")
-
-
-@refunds.node(id="IssueRefund", input_schema=OpenInput, output_schema=EmptyOutput)
-def issue_refund(ctx):
-    return ctx.result(
-        output={},
-        state_updates={"refund_issued": True},
-        next_state="End",
-    )
-
-
-@refunds.node(id="DenyRefund", input_schema=OpenInput, output_schema=TextOutput)
-def deny_refund(ctx):
-    return ctx.result(
-        output={"message": "Refund not allowed for this order."},
-        next_state="End",
-    )
-
-
-# Model gathers evidence with allow-listed tools (notes only — not free-form state).
-investigate = ReasoningNode(
-    id="InvestigateRefund",
-    group="refunds",
-    input_schema=OpenInput,
-    prompt=(
-        "Look up the order. Note whether it is within the refund window and "
-        "whether it was already refunded. Call lookup_order when you need data."
-    ),
-    tools=("lookup_order",),
-)
-
-# After reasoning, hard rules decide the payout path.
-refund_logic = DeterministicRouter(
-    id="RefundLogic",
-    rules=[
-        (
-            lambda ctx: (
-                ctx.state.get("within_window") is True
-                and ctx.state.get("already_refunded") is not True
-            ),
-            issue_refund,
-        ),
-        (lambda ctx: True, deny_refund),  # catch-all last
-    ],
-)
-
-refunds.routers = [refund_logic]
-refunds.entry = "InvestigateRefund"
-refunds.add_edge("InvestigateRefund", "RefundLogic")
-
-
-# Constrained JSON status extract (no tools).
-order_status = SchemaNode(
-    id="OrderStatus",
-    input_schema=OpenInput,
-    output_schema=OrderStatusOut,
-    prompt="Extract the customer's order status as JSON.",
-)
-
-
-@node(id="Login", input_schema=OpenInput, output_schema=EmptyOutput)
-def login(ctx):
-    return ctx.result(
-        output={},
-        state_updates={"token_valid": True},
-        next_state="End",
-    )
-
-
-out_of_scope = SchemaNode(
-    id="OutOfScope",
-    is_fallback=True,
-    input_schema=OpenInput,
-    output_schema=TextOutput,
-    prompt="Politely refuse anything outside refunds or order status.",
-)
-
-
-# --- Routers ----------------------------------------------------------------
-
-# Model picks a labeled lane;
-```
-
-Python handlers stay on `@node`. The model reasons, emits `<TOOL:lookup_order>`
-with no arguments, a parameter extractor fills a JSON object constrained by the
-tool's pydantic schema, arguments are validated before the tool runs, and the
-outcome is reinjected so reasoning continues. Only the node's own tools appear
-in its prompt.
-
-The default extractor uses the same provider; plug a trained edge extractor in
-with `ControlManager(graph, extractor=my_extractor)` — anything implementing
-`async extract(messages, tool) -> ToolCall` works, which is the same contract
-the trained extractors already speak.
-
-Guarantees in this loop: a proposed tool that the node does not declare is
-denied and never executed (the refusal is fed back so the model can recover),
-invalid arguments never reach the tool, duplicate calls are rejected, and the
-loop is bounded by `max_tool_calls`. Every attempt lands in
-`NodeResult.tool_calls`, for a complete audit trail.
-
-## Example and docs
-
-- [`examples/refund_workflow.py`](examples/refund_workflow.py) — end-to-end
-  workflow with guards, tools, a rejection, and a fallback.
-- [`docs/concepts.md`](docs/concepts.md) — methodology: model-backed nodes,
-  routers, proposal vs permission, fail-closed gates, wire contracts.
-- Site concepts:
-  [model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes),
-  [routers](https://docs.neosyntropy.com/concepts/routers),
-  [nodes](https://docs.neosyntropy.com/concepts/nodes),
-  [edges](https://docs.neosyntropy.com/concepts/edges),
-  [groups](https://docs.neosyntropy.com/concepts/groups),
-  [control manager](https://docs.neosyntropy.com/concepts/control-manager).
-- [`docs/site/framework-docs.json`](docs/site/framework-docs.json) — canonical
-  website docs (Get started, Core concepts, Control API). CI syncs this file
-  into the frontend repo; see [`docs/site/README.md`](docs/site/README.md).
-
-## Tests
-
-```bash
-pytest
-ruff check .
-```
+Every cycle returns a `RunResult` with a full `AuditRecord`. A rejection is a
+normal outcome — `result.rejected` is set and the audit explains why.
+
+More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) ·
+[`examples/refund_workflow.py`](examples/refund_workflow.py)
