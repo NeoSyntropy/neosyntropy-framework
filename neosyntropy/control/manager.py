@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -219,6 +220,20 @@ class ControlManager:
         else:
             await self._observe(run_id, "run_failed", {})
             status = "failed"
+        warm_blobs = [result.rejection or ""]
+        for step in result.steps:
+            for item in step.results:
+                if item.error:
+                    warm_blobs.append(item.error)
+        if any(
+            "warming" in blob.lower() or "still loading the gpu model" in blob.lower()
+            for blob in warm_blobs
+        ):
+            print(
+                "neosyntropy: inference is still warming up "
+                "(GPU cold start, often 1–2 minutes). Retry shortly.",
+                file=sys.stderr,
+            )
         output: dict[str, Any] | None = None
         if self.capture_payloads:
             output = {

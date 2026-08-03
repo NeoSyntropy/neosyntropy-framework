@@ -15,6 +15,16 @@ from .core.models import Candidate, RoutingPlan
 class BackendError(RuntimeError):
     """The NeoSyntropy backend rejected or could not serve a request."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+INFERENCE_WARMING_CODE = "inference_warming"
+INFERENCE_WARMING_MESSAGE = (
+    "Inference is still warming up (GPU cold start, often 1–2 minutes). "
+    "Retry shortly."
+)
 
 DEFAULT_API_URL = "https://api.neosyntropy.com"
 
@@ -32,7 +42,7 @@ class Client:
         api_key: str,
         project_id: str,
         base_url: str = DEFAULT_API_URL,
-        timeout: float = 30.0,
+        timeout: float = 180.0,
         telemetry_timeout: float = 2.0,
     ) -> None:
         if not api_key:
@@ -64,7 +74,7 @@ class BackendClient:
         *,
         api_key: str | None = None,
         project_id: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = 180.0,
         telemetry_timeout: float = 2.0,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
@@ -304,14 +314,34 @@ class BackendClient:
                 decoded = json.loads(response.read().decode())
         except HTTPError as exc:
             detail = exc.read().decode(errors="replace")
+            code: str | None = None
             try:
                 payload = json.loads(detail)
-                detail = payload.get("detail", detail)
-                if isinstance(detail, dict):
-                    detail = detail.get("message", detail)
+                nested = payload.get("detail", detail)
+                if isinstance(nested, dict):
+                    code = nested.get("code")
+                    detail = nested.get("message", nested)
+                else:
+                    detail = nested
             except json.JSONDecodeError:
                 pass
-            raise BackendError(f"backend returned HTTP {exc.code}: {detail}") from exc
+            detail_text = str(detail)
+            warming = (
+                exc.code == 503
+                or code == INFERENCE_WARMING_CODE
+                or INFERENCE_WARMING_CODE in detail_text.lower()
+                or "still loading the gpu model" in detail_text.lower()
+                or "vllm adapter load failed" in detail_text.lower()
+            )
+            if warming:
+                raise BackendError(
+                    INFERENCE_WARMING_MESSAGE,
+                    code=INFERENCE_WARMING_CODE,
+                ) from exc
+            raise BackendError(
+                f"backend returned HTTP {exc.code}: {detail_text}",
+                code=code if isinstance(code, str) else None,
+            ) from exc
         except URLError as exc:
             raise BackendError(f"cannot reach NeoSyntropy backend: {exc.reason}") from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

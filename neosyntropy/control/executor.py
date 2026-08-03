@@ -124,10 +124,16 @@ class TopologyExecutor:
         except ToolNotAllowedError:
             raise
         except Exception as exc:
+            code = getattr(exc, "code", None)
+            message = str(exc)
+            if code == "inference_warming" or "still warming" in message.lower():
+                error = message
+            else:
+                error = f"{type(exc).__name__}: {exc}"
             return NodeResult(
                 node_id=definition.id,
                 status="failed",
-                error=f"{type(exc).__name__}: {exc}",
+                error=error,
             )
 
         return self._normalize(definition, raw)
