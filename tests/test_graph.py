@@ -103,11 +103,15 @@ def test_schema_reasoning_combine_constructors():
         tools=("lookup",),
         output_schema=TextOutput,
         prompt="reason then extract",
+        adapter_id="code-review-bot",
+        adapter_version="production",
     )
     nodes, edges = combine.expand()
     assert [item.id for item in nodes] == ["Lane", f"Lane{COMBINE_SCHEMA_SUFFIX}"]
     assert nodes[0].mode == "reasoning"
     assert nodes[1].mode == "schema_extraction"
+    assert nodes[0].adapter_id == "code-review-bot"
+    assert nodes[1].adapter_version == "production"
     assert edges[0].source == "Lane"
     assert edges[0].target == f"Lane{COMBINE_SCHEMA_SUFFIX}"
 

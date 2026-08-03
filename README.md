@@ -171,7 +171,7 @@ include topology, candidates, execution plans, providers, or model names.
   lands on that entry node.
 - **`PreferredPathRouter`** (offline runtime): takes exactly one matching
   deterministic edge, else a unique semantic target, else the fallback edge.
-- Node generation for handler-less nodes may still use `/framework/slm`;
+- Node generation for handler-less nodes may still use `/framework/inference`;
   selection/routing stay behind the control API.
 
 Set `NEOSYNTROPY_API_URL` with `NEOSYNTROPY_API_KEY` + `NEOSYNTROPY_PROJECT_ID`

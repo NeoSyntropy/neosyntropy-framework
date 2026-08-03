@@ -150,7 +150,12 @@ class ProviderParameterExtractor:
         self.instruction = instruction
 
     async def extract(
-        self, messages: Sequence[dict[str, str]], tool: str
+        self,
+        messages: Sequence[dict[str, str]],
+        tool: str,
+        *,
+        adapter_id: str | None = None,
+        adapter_version: str | None = None,
     ) -> ToolCall:
         spec = self.registry.get(tool)
         prompt = build_extraction_prompt(
@@ -159,7 +164,13 @@ class ProviderParameterExtractor:
             normalize_messages(messages),
             instruction=self.instruction,
         )
-        raw = await _generate(self.provider, prompt, tool_json_schema(spec.args_model))
+        raw = await _generate(
+            self.provider,
+            prompt,
+            tool_json_schema(spec.args_model),
+            adapter_id=adapter_id,
+            adapter_version=adapter_version,
+        )
         match = _JSON_OBJECT.search(raw)
         if match is None:
             raise ExtractionError(f"no JSON object in extractor output: {raw!r}")
@@ -219,6 +230,12 @@ class ToolCallingLoop:
         seen: set[str] = set()
         executed = 0
         turns = 0
+        adapter_kwargs = {
+            "adapter_id": getattr(node, "adapter_id", None) if node is not None else None,
+            "adapter_version": (
+                getattr(node, "adapter_version", None) if node is not None else None
+            ),
+        }
 
         while turns < self.max_tool_calls * 2 + 2:
             turns += 1
@@ -231,9 +248,12 @@ class ToolCallingLoop:
                     node=node,
                     context=context,
                     tools=tools,
+                    **adapter_kwargs,
                 )
             else:
-                raw = await _generate(provider, _reasoning_prompt(history))
+                raw = await _generate(
+                    provider, _reasoning_prompt(history), **adapter_kwargs
+                )
             visible, tool = parse_tool_trigger(raw)
             if visible:
                 visible_parts.append(visible)
@@ -266,7 +286,12 @@ class ToolCallingLoop:
                 break
 
             try:
-                call = await extractor.extract(history, tool)
+                if isinstance(extractor, ProviderParameterExtractor):
+                    call = await extractor.extract(
+                        history, tool, **adapter_kwargs
+                    )
+                else:
+                    call = await extractor.extract(history, tool)
             except (ExtractionError, KeyError) as exc:
                 records.append(ToolCallRecord(tool=tool, ok=False, error=str(exc)))
                 history.append(
@@ -354,6 +379,7 @@ class ToolCallingLoop:
                 provider,
                 _structured_output_prompt(history),
                 output_schema,
+                **adapter_kwargs,
             )
             visible_parts = [structured]
             history.append({"role": "assistant", "content": structured})

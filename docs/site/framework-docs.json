@@ -502,7 +502,7 @@
               ],
               "callout": {
                 "title": "Internal endpoints",
-                "text": "POST /api/v1/framework/semantic-node-hybrid, /router, and /slm power the control engine and generation. They are not the integration surface for application clients.",
+                "text": "POST /api/v1/framework/semantic-node-hybrid, /router, and /inference power the control engine and generation. They are not the integration surface for application clients.",
                 "tone": "warning"
               }
             }
@@ -514,7 +514,7 @@
           "navTitle": "Configuration",
           "eyebrow": "Operations",
           "title": "Configure the SDK client",
-          "description": "Client configuration is environment-driven. Router, hybrid search, and SLM URLs are server-side only.",
+          "description": "Client configuration is environment-driven. Router, hybrid search, and inference URLs are server-side only.",
           "sections": [
             {
               "id": "client-env",
@@ -547,7 +547,7 @@
               "id": "server",
               "title": "Server-side (not client-facing)",
               "paragraphs": [
-                "FRAMEWORK_ROUTER_*, FRAMEWORK_SEMANTIC_NODE_HYBRID_*, and FRAMEWORK_SLM_* configure upstream inference services on the backend. Application clients do not set these."
+                "INFERENCE_SERVICE_* and FRAMEWORK_*_MODEL configure the upstream inference container on the backend; FRAMEWORK_SEMANTIC_NODE_HYBRID_* configures hybrid search. Application clients do not set these."
               ]
             }
           ],

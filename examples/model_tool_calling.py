@@ -80,7 +80,7 @@ def build_graph() -> FSM:
             ReasoningNode(
                 id="Support",
                 description="Answer order questions",
-                provider="slm",
+                provider="inference",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
                 input_schema=OpenInput,
@@ -115,7 +115,7 @@ def show(title: str, result) -> None:
 
 def run(title: str, replies: list[str], intent: str) -> None:
     manager = ControlManager(
-        build_graph(), providers={"slm": ScriptedProvider(replies)}, tools=registry
+        build_graph(), providers={"inference": ScriptedProvider(replies)}, tools=registry
     )
     show(title, manager.run(RunRequest(intent=intent)))
 

@@ -111,6 +111,7 @@ class ControlManager:
             backend_provider = BackendProvider(resolved_backend)
             backend_providers = {
                 "backend": backend_provider,
+                "inference": backend_provider,
                 # Compatibility for graphs authored before provider selection
                 # moved behind the backend.
                 "slm": backend_provider,

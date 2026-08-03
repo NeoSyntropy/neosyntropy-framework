@@ -89,6 +89,8 @@ def _shared_kwargs(
     is_fallback: bool,
     metadata: dict[str, Any] | None,
     provider: str,
+    adapter_id: str | None = None,
+    adapter_version: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": id,
@@ -100,6 +102,8 @@ def _shared_kwargs(
         "is_fallback": is_fallback,
         "metadata": metadata or {},
         "provider": provider,
+        "adapter_id": adapter_id,
+        "adapter_version": adapter_version,
     }
 
 
@@ -128,6 +132,10 @@ class Node(BaseModel):
     output_schema: dict[str, Any]
     group: str | None = None
     is_fallback: bool = False
+    # Inference catalog identity (``node:{adapter_id}@{adapter_version}``).
+    # Required for provider-backed nodes calling the NeoSyntropy inference API.
+    adapter_id: str | None = None
+    adapter_version: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     handler: Callable[..., Any] | None = Field(default=None, exclude=True, repr=False)
     input_model: type[BaseModel] | None = Field(default=None, exclude=True, repr=False)
@@ -207,6 +215,8 @@ def SchemaNode(
     is_fallback: bool = False,
     metadata: dict[str, Any] | None = None,
     provider: str = "backend",
+    adapter_id: str | None = None,
+    adapter_version: str | None = None,
 ) -> Node:
     """Provider-backed schema extraction: constrained JSON, no tools."""
     if not prompt:
@@ -222,6 +232,8 @@ def SchemaNode(
             is_fallback=is_fallback,
             metadata=metadata,
             provider=provider,
+            adapter_id=adapter_id,
+            adapter_version=adapter_version,
         ),
         tools=(),
         mode="schema_extraction",
@@ -245,6 +257,8 @@ def ReasoningNode(
     is_fallback: bool = False,
     metadata: dict[str, Any] | None = None,
     provider: str = "backend",
+    adapter_id: str | None = None,
+    adapter_version: str | None = None,
 ) -> Node:
     """Provider-backed reasoning: tools allowed, plain-text notes out."""
     if not prompt:
@@ -263,6 +277,8 @@ def ReasoningNode(
             is_fallback=is_fallback,
             metadata=metadata,
             provider=provider,
+            adapter_id=adapter_id,
+            adapter_version=adapter_version,
         ),
         tools=tool_names,
         mode="reasoning",
@@ -294,6 +310,8 @@ class CombineNode:
     metadata: dict[str, Any] | None = None
     provider: str = "backend"
     schema_prompt: str | None = None
+    adapter_id: str | None = None
+    adapter_version: str | None = None
 
     def __post_init__(self) -> None:
         if not self.prompt:
@@ -325,6 +343,8 @@ class CombineNode:
             group=self.group,
             metadata={**meta, "combine_role": "reasoning"},
             provider=self.provider,
+            adapter_id=self.adapter_id,
+            adapter_version=self.adapter_version,
         )
         object.__setattr__(reasoning, "kind", "combine_part")
 
@@ -342,6 +362,8 @@ class CombineNode:
             group=self.group,
             metadata={**meta, "combine_role": "schema"},
             provider=self.provider,
+            adapter_id=self.adapter_id,
+            adapter_version=self.adapter_version,
         )
         object.__setattr__(schema, "kind", "combine_part")
 

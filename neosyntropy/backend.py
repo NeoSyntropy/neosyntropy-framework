@@ -23,7 +23,7 @@ class Client:
     """Project-scoped NeoSyntropy client for application code.
 
     Developers only supply an API key and project id. Pass this to
-    :meth:`FSM.run` — control / SLM plumbing stays inside the framework.
+    :meth:`FSM.run` — control / inference plumbing stays inside the framework.
     """
 
     def __init__(
@@ -199,9 +199,15 @@ class BackendClient:
         node: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
+        adapter_id: str | None = None,
+        adapter_version: str | None = None,
     ) -> str:
         """Generate text. Prefer ``node`` + ``context`` so the backend builds the prompt."""
         payload: dict[str, Any] = {"purpose": purpose, "schema": schema}
+        if adapter_id is not None:
+            payload["adapter_id"] = adapter_id
+        if adapter_version is not None:
+            payload["adapter_version"] = adapter_version
         if node is not None:
             payload["node"] = node
             if context is not None:
@@ -212,10 +218,10 @@ class BackendClient:
             payload["prompt"] = prompt
         else:
             raise BackendError("generate requires prompt or node declaration")
-        response = await self.post("/framework/slm", payload)
+        response = await self.post("/framework/inference", payload)
         text = response.get("text")
         if not isinstance(text, str):
-            raise BackendError("backend SLM response has no text")
+            raise BackendError("backend inference response has no text")
         return text
 
     async def start_control_run(
@@ -338,8 +344,22 @@ class BackendProvider:
         node: Any = None,
         context: Any = None,
         tools: Any = None,
+        adapter_id: str | None = None,
+        adapter_version: str | None = None,
     ) -> str:
-        kwargs: dict[str, Any] = {"schema": schema, "purpose": self.purpose}
+        resolved_adapter_id = adapter_id
+        resolved_adapter_version = adapter_version
+        if node is not None:
+            if resolved_adapter_id is None:
+                resolved_adapter_id = getattr(node, "adapter_id", None)
+            if resolved_adapter_version is None:
+                resolved_adapter_version = getattr(node, "adapter_version", None)
+        kwargs: dict[str, Any] = {
+            "schema": schema,
+            "purpose": self.purpose,
+            "adapter_id": resolved_adapter_id,
+            "adapter_version": resolved_adapter_version,
+        }
         if node is not None:
             kwargs["node"] = _wire_node_declaration(node)
             if context is not None:
@@ -352,7 +372,7 @@ class BackendProvider:
 
 def _wire_node_declaration(node: Any) -> dict[str, Any]:
     # input_schema is enforced client-side / on control-run graph nodes;
-    # the /framework/slm NodePromptDeclaration wire does not carry it.
+    # the /framework/inference NodePromptDeclaration wire does not carry it.
     return {
         "id": getattr(node, "id", ""),
         "name": getattr(node, "name", "") or "",

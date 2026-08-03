@@ -241,7 +241,7 @@ def _graph_with_tool_node() -> FSM:
             Node(
                 id="Support",
                 description="Answer order questions",
-                provider="slm",
+                provider="inference",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
                 input_schema=OpenInput, output_schema=TextOutput,
@@ -265,7 +265,7 @@ def test_provider_backed_node_calls_tools_end_to_end(registry):
         ]
     )
     manager = ControlManager(
-        _graph_with_tool_node(), providers={"slm": provider}, tools=registry
+        _graph_with_tool_node(), providers={"inference": provider}, tools=registry
     )
     result = manager.run(RunRequest(intent="where is order ord_9?"))
 
@@ -283,7 +283,7 @@ def test_framework_seeds_provider_with_declared_prompt_only(registry):
         ["No tools needed.", '{"message": "No tools needed."}']
     )
     manager = ControlManager(
-        _graph_with_tool_node(), providers={"slm": provider}, tools=registry
+        _graph_with_tool_node(), providers={"inference": provider}, tools=registry
     )
     manager.run(RunRequest(intent="hello"))
     prompt = provider.prompts[0]

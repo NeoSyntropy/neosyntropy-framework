@@ -59,6 +59,35 @@ def test_backend_adapters_do_not_accept_provider_or_model() -> None:
     assert all("provider" not in payload and "model" not in payload for _, payload in client.calls)
 
 
+def test_backend_provider_forwards_node_adapter_identity() -> None:
+    import asyncio
+
+    from neosyntropy import OpenInput, SchemaNode, TextOutput
+
+    client = RecordingBackend()
+    node = SchemaNode(
+        id="Summarize",
+        input_schema=OpenInput,
+        output_schema=TextOutput,
+        prompt="summarize",
+        adapter_id="code-review-bot",
+        adapter_version="production",
+    )
+    asyncio.run(
+        BackendProvider(client).generate(
+            "hello",
+            schema=node.output_schema,
+            node=node,
+        )
+    )
+    assert client.calls[-1][0] == "generate"
+    payload = client.calls[-1][1]
+    assert payload["adapter_id"] == "code-review-bot"
+    assert payload["adapter_version"] == "production"
+    assert "model" not in payload
+    assert "provider" not in payload
+
+
 def test_backend_client_reads_api_key_and_project_from_env(monkeypatch) -> None:
     monkeypatch.setenv("NEOSYNTROPY_API_URL", "https://api.example.test")
     monkeypatch.setenv("NEOSYNTROPY_API_KEY", "api-key")
