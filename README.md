@@ -65,14 +65,47 @@ neosyntropy logout
 ## Quickstart
 
 ```python
-from neosyntropy import Client, EmptyOutput, TextOutput, Workflow, node
+from pydantic import BaseModel, ConfigDict
+
+from neosyntropy import (
+    Client,
+    EmptyOutput,
+    OpenInput,
+    SchemaNode,
+    TextOutput,
+    Workflow,
+    node,
+)
+
+# Connect with your project credentials (console → API keys / project id).
+client = Client(
+    api_key="your-api-key",
+    project_id="your-project-id",
+)
+
+
+class RefundTicket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str
+    amount: float
+    reason: str
+
 
 @node(id="VerifyIdentity", output_schema=EmptyOutput)
 def verify_identity(ctx):
     """Verify the requester owns the order."""
     return ctx.result(output={}, state_updates={"verified": True})
 
-@node(id="IssueRefund", prerequisites=("VerifyIdentity",), output_schema=EmptyOutput)
+# Provider-backed: model must return JSON matching RefundTicket.
+extract_ticket = SchemaNode(
+    id="ExtractTicket",
+    input_schema=OpenInput,
+    output_schema=RefundTicket,
+    prompt="Extract a refund ticket as JSON from the customer request.",
+)
+
+@node(id="IssueRefund", prerequisites=("ExtractTicket",), output_schema=EmptyOutput)
 def issue_refund(ctx):
     return ctx.result(output={}, state_updates={"refund_issued": True}, next_state="End")
 
@@ -81,15 +114,17 @@ def out_of_scope(ctx):
     return ctx.result(output={"message": "Out of scope for this workflow."})
 
 fsm = Workflow(
-    [verify_identity, issue_refund],
+    [verify_identity, extract_ticket, issue_refund],
     fallback=out_of_scope,
 )
 
-client = Client(api_key="your-api-key", project_id="your-project-id")
-result = fsm.run({"intent": "refund my order", "current_state": "Start"}, client=client)
+result = fsm.run(
+    {"intent": "refund order ord_123 for 40 dollars — item arrived damaged"},
+    client=client,
+)
 
-print(result.final_state)                    # one committed transition
-print(result.audit.committed_transitions)    # ["Start->VerifyIdentity"]
+print(result.final_state)
+print(result.audit.committed_transitions)
 ```
 
 Every cycle returns a `RunResult` with a full `AuditRecord`. A rejection is a
