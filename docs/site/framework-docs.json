@@ -188,6 +188,103 @@
           ]
         },
         {
+          "slug": "concepts/model-nodes",
+          "navTitle": "Model-backed nodes",
+          "eyebrow": "Core concepts",
+          "title": "Put tiny models into ordinary code paths",
+          "description": "SchemaNode and ReasoningNode are how developers drop small, scoped AI models into a workflow. CombineNode expands to reasoning then schema. The control layer — not the model — owns transitions.",
+          "sections": [
+            {
+              "id": "why",
+              "title": "Why these constructors exist",
+              "paragraphs": [
+                "Each model-backed node gets a small prompt and a fixed contract. Cheap small language models can do the work inside one step; fail-closed gates still decide what may commit.",
+                "Python handlers stay on @node. Use SchemaNode / ReasoningNode / CombineNode when the step itself should call a provider."
+              ]
+            },
+            {
+              "id": "schema-node",
+              "title": "SchemaNode — constrained JSON",
+              "paragraphs": [
+                "SchemaNode is provider-backed schema extraction: the model returns JSON matching output_schema. It has no tools. Use it to produce a typed structure from state or prior notes."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "SchemaNode(\n    id=\"Ticket\",\n    input_schema=OpenInput,\n    output_schema=SupportTicket,\n    prompt=\"Extract a support ticket as JSON.\",\n)"
+              }
+            },
+            {
+              "id": "reasoning-node",
+              "title": "ReasoningNode — tools and notes",
+              "paragraphs": [
+                "ReasoningNode is provider-backed reasoning: the model may call allow-listed tools and writes plain-text notes. Use it for evidence gathering or short deliberation before a later schema step."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "ReasoningNode(\n    id=\"Support\",\n    input_schema=OpenInput,\n    prompt=\"Help the customer with their order.\",\n    tools=(\"lookup_order\",),\n)"
+              }
+            },
+            {
+              "id": "combine-node",
+              "title": "CombineNode — reasoning then schema",
+              "paragraphs": [
+                "CombineNode expands into two FSM states: entry {id} (reasoning + tools) then {id}.Schema (constrained JSON). External edges should target {id} and leave from {id}.Schema."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "CombineNode(\n    id=\"Clearance\",\n    input_schema=OpenInput,\n    tools=(\"lookup_order\",),\n    output_schema=SupportTicket,\n    prompt=\"Gather evidence, then extract a ticket.\",\n)"
+              },
+              "callout": {
+                "title": "Proposal is not permission",
+                "text": "A model asking for an undeclared tool is denied and never executed. Invalid arguments never reach the tool. Every attempt lands in NodeResult.tool_calls."
+              }
+            }
+          ],
+          "sourceNote": "Grounded in neosyntropy-framework README and docs/concepts.md."
+        },
+        {
+          "slug": "concepts/routers",
+          "navTitle": "Routers",
+          "eyebrow": "Core concepts",
+          "title": "Deterministic and semantic routers",
+          "description": "Author routing as DeterministicRouter or SemanticRouter units instead of hand-writing every edge. Both compile into the FSM; ControlManager still validates and commits.",
+          "sections": [
+            {
+              "id": "deterministic",
+              "title": "DeterministicRouter — hard rules",
+              "paragraphs": [
+                "DeterministicRouter encodes hard business rules: the first matching (predicate, target) wins. Targets may be nodes, groups, or other routers. At compile time the unit becomes deterministic edges.",
+                "When running against the backend control API, the SDK resolves unique deterministic hops locally before the remote cycle so the backend receives a concrete current state."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "auth = DeterministicRouter(\n    id=\"CheckAuth\",\n    rules=[\n        (lambda ctx: ctx.state.get(\"token_valid\") is True, intent_router),\n        (lambda ctx: ctx.state.get(\"token_valid\") is False, login_node),\n    ],\n)"
+              }
+            },
+            {
+              "id": "semantic",
+              "title": "SemanticRouter — labeled intent routes",
+              "paragraphs": [
+                "SemanticRouter lets a model choose among labeled targets (routes={label: node_or_group}) with an optional fallback_node. The model proposes a label; validators and the transition table still decide whether that hop is legal."
+              ],
+              "code": {
+                "label": "Python SDK",
+                "language": "python",
+                "code": "intent = SemanticRouter(\n    id=\"CustomerIntent\",\n    routes={\n        \"wants_to_pay\": billing_group,\n        \"needs_support\": support_group,\n    },\n    fallback_node=general_chat,\n)"
+              },
+              "callout": {
+                "title": "Use for intent branching",
+                "text": "Semantic routers bound the choice set. They are not unconstrained agents — every accepted step is still a logged, gated state change."
+              }
+            }
+          ],
+          "sourceNote": "Grounded in neosyntropy-framework README and docs/concepts.md."
+        },
+        {
           "slug": "concepts/groups",
           "navTitle": "Groups",
           "eyebrow": "Core concepts",

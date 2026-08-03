@@ -22,21 +22,41 @@ bounded nondeterminism under gates, not "same tokens every time".
 
 ## The primitives
 
-### Node — executable capability
+The model-backed constructors are how developers put tiny AI models into
+application code. Each node gets a small, scoped prompt and a fixed contract;
+the control layer — not the model — owns transitions and commits.
 
-A node packages a capability: a Python handler or a provider-backed prompt,
-declared tools, prerequisites, and an optional group. The router may select
-one or several nodes per cycle. **Nodes are not workflow positions**: running
-three nodes in parallel does not create three states.
+### SchemaNode — constrained JSON
 
-Nodes return a `NodeResult` — output, `state_updates`, and an optional
-`next_state`. That result is a proposal. Nothing a node returns commits
-anything.
+`SchemaNode` is provider-backed schema extraction: the model must return JSON
+that matches `output_schema`. It has no tools. Use it when the step's job is
+to produce a typed structure (ticket, summary, classification) from state or
+prior notes.
 
-Tools are capabilities *on* a node (`tools=("lookup_order",)`), never graph
-vertices. Handlers reach tools through a bound facade that enforces the
-allow-list fail-closed: calling an undeclared tool is denied fail-closed, not
-an error to retry around.
+```python
+SchemaNode(
+    id="Ticket",
+    input_schema=OpenInput,
+    output_schema=SupportTicket,
+    prompt="Extract a support ticket as JSON.",
+)
+```
+
+### ReasoningNode — tools + notes
+
+`ReasoningNode` is provider-backed reasoning: the model may call allow-listed
+tools and writes plain-text notes (not free-form business state). Use it when
+the step needs evidence gathering or short deliberation before a later schema
+step.
+
+```python
+ReasoningNode(
+    id="Support",
+    input_schema=OpenInput,
+    prompt="Help the customer with their order.",
+    tools=("lookup_order",),
+)
+```
 
 Provider-backed nodes that declare tools run a split reasoning/extraction
 loop, because guessing arguments and choosing actions are different problems:
@@ -55,6 +75,39 @@ not declare is denied and told so, and the tool never executes. Deterministic
 code calling an undeclared tool is a different thing — a programming error —
 and rejects the cycle outright. Every attempt (denied, failed, or successful)
 is recorded in `NodeResult.tool_calls`, so the audit trail stays complete.
+
+### CombineNode — reasoning then schema
+
+`CombineNode` is an authoring unit that expands into two FSM states: entry
+`{id}` (reasoning + tools) then `{id}.Schema` (constrained JSON). External
+edges should target `{id}` and leave from `{id}.Schema`.
+
+```python
+CombineNode(
+    id="Clearance",
+    input_schema=OpenInput,
+    tools=("lookup_order",),
+    output_schema=SupportTicket,
+    prompt="Gather evidence, then extract a ticket.",
+)
+```
+
+### Node — executable capability
+
+A node packages a capability: a Python handler (`@node`) or a provider-backed
+prompt (`SchemaNode` / `ReasoningNode`), declared tools, prerequisites, and an
+optional group. The router may select one or several nodes per cycle.
+**Nodes are not workflow positions**: running three nodes in parallel does not
+create three states.
+
+Nodes return a `NodeResult` — output, `state_updates`, and an optional
+`next_state`. That result is a proposal. Nothing a node returns commits
+anything.
+
+Tools are capabilities *on* a node (`tools=("lookup_order",)`), never graph
+vertices. Handlers reach tools through a bound facade that enforces the
+allow-list fail-closed: calling an undeclared tool is denied fail-closed, not
+an error to retry around.
 
 ### Edge — one permitted movement
 
@@ -104,6 +157,46 @@ logic = DeterministicRouter(
 billing.routers = [logic]
 billing.entry = "ValidateCard"
 billing.add_edge("ValidateCard", "BillingLogic")
+```
+
+### DeterministicRouter — hard rules
+
+`DeterministicRouter` encodes hard business rules: the first matching
+`(predicate, target)` wins. Predicates see run context/state; targets may be
+nodes, groups, or other routers. At compile time the unit becomes
+deterministic edges the control cycle can follow without calling a model.
+
+```python
+auth = DeterministicRouter(
+    id="CheckAuth",
+    rules=[
+        (lambda ctx: ctx.state.get("token_valid") is True, intent_router),
+        (lambda ctx: ctx.state.get("token_valid") is False, login_node),
+    ],
+)
+```
+
+Guards stay local: when running against the backend control API, the SDK
+resolves unique deterministic hops before the remote cycle so the backend
+receives a concrete current state.
+
+### SemanticRouter — labeled intent routes
+
+`SemanticRouter` lets a model choose among labeled targets
+(`routes={label: node_or_group}`) with an optional `fallback_node`. The model
+proposes a label; validators and the transition table still decide whether
+that hop is legal. Use it for intent branching, not for unconstrained
+tool-using agents.
+
+```python
+intent = SemanticRouter(
+    id="CustomerIntent",
+    routes={
+        "wants_to_pay": billing_group,
+        "needs_support": support_group,
+    },
+    fallback_node=general_chat,
+)
 ```
 
 ### ControlManager — the pipeline as one object

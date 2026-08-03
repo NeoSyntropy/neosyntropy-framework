@@ -3,14 +3,30 @@
 A deterministic control layer for AI workflows. Models propose what should
 happen next; a finite-state graph defines what is allowed to happen.
 
-Core primitives:
+Core primitives — start with the model-backed nodes. That is the point of the
+framework: you drop tiny, scoped AI models into ordinary code paths
+(`SchemaNode` / `ReasoningNode`), while routers and `ControlManager` keep every
+proposal inside a fail-closed graph.
 
 | Primitive | Role |
 |---|---|
-| `Node` | Executable capability (handler or provider-backed), never a workflow position |
-| `Edge` | One permitted movement: `deterministic`, `semantic`, or `fallback` |
-| `Group` | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
-| `ControlManager` | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit → audit |
+| [`SchemaNode`](docs/concepts.md#schemanode--constrained-json) | Provider-backed extraction: a small model returns constrained JSON for `output_schema`, no tools |
+| [`ReasoningNode`](docs/concepts.md#reasoningnode--tools--notes) | Provider-backed reasoning: a small model may call allow-listed tools and write plain-text notes |
+| [`CombineNode`](docs/concepts.md#combinenode--reasoning-then-schema) | Authoring unit that expands to reasoning → schema FSM states |
+| [`Node`](docs/concepts.md#node--executable-capability) | Executable capability (Python handler or provider-backed), never a workflow position |
+| [`Edge`](docs/concepts.md#edge--one-permitted-movement) | One permitted movement: `deterministic`, `semantic`, or `fallback` |
+| [`Group`](docs/concepts.md#group--organization-and-optional-authored-subgraph) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
+| [`DeterministicRouter`](docs/concepts.md#deterministicrouter--hard-rules) | First matching `(predicate, target)` rule wins; compiles to deterministic edges |
+| [`SemanticRouter`](docs/concepts.md#semanticrouter--labeled-intent-routes) | Model picks among labeled targets (`routes={label: node_or_group}`); still validated against the graph |
+| [`ControlManager`](docs/concepts.md#controlmanager--the-pipeline-as-one-object) | The whole cycle: deterministic → semantic router → fallback → validate → execute → commit |
+
+Site docs (synced from [`docs/site/framework-docs.json`](docs/site/framework-docs.json)):
+[Nodes](https://docs.neosyntropy.com/concepts/nodes) ·
+[Model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) ·
+[Routers](https://docs.neosyntropy.com/concepts/routers) ·
+[Edges](https://docs.neosyntropy.com/concepts/edges) ·
+[Groups](https://docs.neosyntropy.com/concepts/groups) ·
+[Control manager](https://docs.neosyntropy.com/concepts/control-manager)
 
 ## Install
 
@@ -269,8 +285,15 @@ loop is bounded by `max_tool_calls`. Every attempt lands in
 
 - [`examples/refund_workflow.py`](examples/refund_workflow.py) — end-to-end
   workflow with guards, tools, a rejection, and a fallback.
-- [`docs/concepts.md`](docs/concepts.md) — the distilled methodology: nodes
-  vs states, proposal vs permission, fail-closed gates, wire contracts.
+- [`docs/concepts.md`](docs/concepts.md) — methodology: model-backed nodes,
+  routers, proposal vs permission, fail-closed gates, wire contracts.
+- Site concepts:
+  [model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes),
+  [routers](https://docs.neosyntropy.com/concepts/routers),
+  [nodes](https://docs.neosyntropy.com/concepts/nodes),
+  [edges](https://docs.neosyntropy.com/concepts/edges),
+  [groups](https://docs.neosyntropy.com/concepts/groups),
+  [control manager](https://docs.neosyntropy.com/concepts/control-manager).
 - [`docs/site/framework-docs.json`](docs/site/framework-docs.json) — canonical
   website docs (Get started, Core concepts, Control API). CI syncs this file
   into the frontend repo; see [`docs/site/README.md`](docs/site/README.md).
