@@ -102,7 +102,7 @@ class RefundTicket(BaseModel):
     reason: str
 
 
-@node(id="VerifyIdentity", output_schema=EmptyOutput)
+@node(id="VerifyIdentity", input_schema=OpenInput, output_schema=EmptyOutput)
 def verify_identity(ctx):
     """Verify the requester owns the order."""
     return ctx.result(output={}, state_updates={"verified": True})
@@ -115,11 +115,11 @@ extract_ticket = SchemaNode(
     prompt="Extract a refund ticket as JSON from the customer request.",
 )
 
-@node(id="IssueRefund", prerequisites=("ExtractTicket",), output_schema=EmptyOutput)
+@node(id="IssueRefund", prerequisites=("ExtractTicket",), input_schema=OpenInput, output_schema=EmptyOutput)
 def issue_refund(ctx):
     return ctx.result(output={}, state_updates={"refund_issued": True}, next_state="End")
 
-@node(id="OutOfScope", is_fallback=True, output_schema=TextOutput)
+@node(id="OutOfScope", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)
 def out_of_scope(ctx):
     return ctx.result(output={"message": "Out of scope for this workflow."})
 
@@ -129,7 +129,7 @@ fsm = Workflow(
 )
 
 result = fsm.run(
-    {"intent": "refund order ord_123 for 40 dollars — item arrived damaged"},
+    {"text": "refund order ord_123 for 40 dollars — item arrived damaged"},
     client=client,
 )
 

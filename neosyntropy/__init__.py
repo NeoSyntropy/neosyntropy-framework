@@ -46,7 +46,7 @@ Quickstart::
 
     client = Client(api_key="...", project_id="...")
 
-    result = fsm.run({"intent": "refund order 123"}, client=client)
+    result = fsm.run({"text": "refund order 123"}, client=client)
 
 """
 
@@ -98,7 +98,6 @@ from .core.edge import (
 
 from .core.graph import (
     END,
-    START,
     FSM,
     FSMValidationError,
     Graph,
@@ -235,8 +234,6 @@ __all__ = [
     "DEFAULT_REGISTRY",
 
     "END",
-
-    "START",
 
     "TOOL_TRIGGER",
 

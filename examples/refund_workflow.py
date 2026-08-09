@@ -12,7 +12,7 @@ Run from the repository root::
 
 The demo walks three control cycles (verify -> calculate -> issue), then
 
-shows a guard rejection (zero refund) and an out-of-scope intent that routes
+shows a guard rejection (zero refund) and an out-of-scope input that routes
 
 to the dedicated fallback.
 
@@ -89,7 +89,7 @@ def lookup_order(args: LookupOrderArgs) -> dict:
 
 
 
-@node(id="VerifyIdentity", group="refunds", tools=("lookup_order",), input_schema=OpenInput, output_schema=TextOutput)
+@node(id="VerifyIdentity", group="refunds", tools=("lookup_order",), output_schema=TextOutput)
 
 def verify_identity(ctx):
 
@@ -115,9 +115,7 @@ def verify_identity(ctx):
 
     group="refunds",
 
-    prerequisites=("VerifyIdentity",),
-
-    input_schema=OpenInput, output_schema=TextOutput,
+    prerequisites=("VerifyIdentity",), input_schema=OpenInput, output_schema=TextOutput,
 
 )
 
@@ -145,9 +143,7 @@ def calculate_refund(ctx):
 
     group="refunds",
 
-    prerequisites=("CalculateRefund",),
-
-    input_schema=OpenInput, output_schema=TextOutput,
+    prerequisites=("CalculateRefund",), input_schema=OpenInput, output_schema=TextOutput,
 
 )
 
@@ -190,12 +186,13 @@ def out_of_scope(ctx):
 
 
 graph = FSM(
+        entry="ENTRY",
 
     nodes=[verify_identity, calculate_refund, issue_refund, out_of_scope],
 
     edges=[
 
-        edge_deterministic("Start", "VerifyIdentity"),
+        edge_deterministic("ENTRY", "VerifyIdentity"),
 
         edge_deterministic("VerifyIdentity", "CalculateRefund"),
 
@@ -213,14 +210,13 @@ graph = FSM(
 
         edge_deterministic("IssueRefund", "End"),
 
-        edge_fallback("Start", "OutOfScope"),
+        edge_fallback("ENTRY", "OutOfScope"),
 
         edge_fallback("CalculateRefund", "OutOfScope"),
 
     ],
 
-    groups=[Group(name="refunds", description="Refund handling capabilities")],
-
+    groups=[Group(name="refunds", description="Refund handling capabilities")]
 )
 
 
@@ -267,7 +263,7 @@ def main() -> None:
 
     state: dict = {"order_id": "ord_123", "requested_amount": 80.0}
 
-    current, prior = "Start", []
+    current, prior = "ENTRY", []
 
     for cycle in range(3):
 
@@ -275,7 +271,7 @@ def main() -> None:
 
             RunRequest(
 
-                intent="please refund my order",
+                input={"text": "please refund my order"},
 
                 current_state=current,
 
@@ -309,7 +305,7 @@ def main() -> None:
 
         RunRequest(
 
-            intent="refund my order",
+            input={"text": "refund my order"},
 
             current_state="CalculateRefund",
 
@@ -333,9 +329,11 @@ def main() -> None:
 
     # Fallback: nothing legal from End, so the router proposes the safe stop.
 
-    lost = manager.run(RunRequest(intent="write me a poem", current_state="End"))
+    lost = manager.run(
+        RunRequest(input={"text": "write me a poem"}, current_state="End")
+    )
 
-    show("Out of scope intent", lost)
+    show("Out of scope input", lost)
 
 
 

@@ -25,7 +25,7 @@ from ..core.node import (
     NodeContext,
 )
 from ..providers.base import ProviderRegistry
-from ..tools.calling import ParameterExtractor, ToolCallingLoop
+from ..tools.calling import ParameterExtractor, ToolCallingLoop, expects_json_object
 from ..tools.registry import BoundTools, ToolNotAllowedError, ToolRegistry
 
 
@@ -102,7 +102,7 @@ class TopologyExecutor:
                     node_id=definition.id,
                     output=(
                         _parse_structured(text)
-                        if text is not None and _expects_json_object(output_schema)
+                        if text is not None and expects_json_object(output_schema)
                         else text
                     ),
                     tool_calls=loop.records,
@@ -118,7 +118,7 @@ class TopologyExecutor:
                 )
                 if inspect.isawaitable(output):
                     output = await output
-                if output_schema is not None and _expects_json_object(output_schema):
+                if output_schema is not None and expects_json_object(output_schema):
                     output = _parse_structured(output)
                 raw = NodeResult(node_id=definition.id, output=output)
         except ToolNotAllowedError:
@@ -163,6 +163,15 @@ def _seed_messages(definition: Node, context: RunContext) -> list[dict[str, str]
     messages = [
         {"role": message.role, "content": message.content} for message in context.history
     ]
+    # Run input is assembled into the first backend prompt via ``context``, but
+    # local history drives extractors / later turns — keep the user request here.
+    if context.input:
+        messages.append(
+            {
+                "role": "user",
+                "content": json.dumps(context.input, sort_keys=True, separators=(",", ":")),
+            }
+        )
     messages.append({"role": "user", "content": declared_prompt(definition)})
     return messages
 
@@ -188,18 +197,6 @@ def _provider_generate(
     if "tools" in params and tools is not None:
         kwargs["tools"] = tools
     return generate(declared_prompt(definition), **kwargs)
-
-
-def _expects_json_object(schema: dict[str, Any] | None) -> bool:
-    """True when the output contract is structured JSON (not plain text)."""
-    if not schema:
-        return False
-    schema_type = schema.get("type")
-    if schema_type == "string":
-        return False
-    if schema_type == "object" or "properties" in schema:
-        return True
-    return schema_type is None
 
 
 def _parse_structured(output: Any) -> Any:

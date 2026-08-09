@@ -22,11 +22,15 @@ class ProviderRegistry:
         self._providers[name] = provider
 
     def get(self, name: str) -> Provider:
-        if name not in self._providers:
-            raise KeyError(
-                f"Unknown provider {name!r}; registered: {sorted(self._providers)}"
-            )
-        return self._providers[name]
+        if name in self._providers:
+            return self._providers[name]
+        # If the provider is unknown locally but we have the default backend
+        # provider, delegate to it — the backend owns open-model routing.
+        if "neosyntropy/base" in self._providers:
+            return self._providers["neosyntropy/base"]
+        raise KeyError(
+            f"Unknown provider {name!r}; registered: {sorted(self._providers)}"
+        )
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._providers)

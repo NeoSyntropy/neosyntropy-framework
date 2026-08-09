@@ -123,7 +123,7 @@
               "cards": [
                 {
                   "title": "Selection",
-                  "text": "Retrieve and rank likely capabilities for the current intent and state."
+                  "text": "Retrieve and rank likely capabilities for the current input and state."
                 },
                 {
                   "title": "Control",
@@ -144,7 +144,7 @@
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import ControlManager, FSM\n\nmanager = ControlManager(graph)  # BackendClient.from_env() when credentials exist\nresult = manager.run({\n    \"intent\": \"verify the customer and review refund eligibility\",\n    \"current_state\": \"Start\",\n    \"state\": {\"order_id\": \"ord_123\"},\n})\n\nprint(result.final_state)\nprint(result.completed)\nprint(result.rejected)"
+                "code": "from neosyntropy import ControlManager, FSM\n\nmanager = ControlManager(graph)  # BackendClient.from_env() when credentials exist\nresult = manager.run({\n    \"input\": {\"text\": \"verify the customer and review refund eligibility\"},\n    \"current_state\": \"\",\n    \"state\": {\"order_id\": \"ord_123\"},\n})\n\nprint(result.final_state)\nprint(result.completed)\nprint(result.rejected)"
               }
             }
           ],
@@ -470,7 +470,7 @@
               "code": {
                 "label": "Request",
                 "language": "shell",
-                "code": "curl -X POST \"$NEOSYNTROPY_API_URL/api/v1/control/runs\" \\\n  -H \"Authorization: Bearer $NEOSYNTROPY_API_KEY\" \\\n  -H \"X-NeoSyntropy-Project-ID: $NEOSYNTROPY_PROJECT_ID\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"graph\": {\n      \"schema_version\": 1,\n      \"nodes\": [\n        {\n          \"id\": \"Verify\",\n          \"name\": \"Verify\",\n          \"description\": \"verify identity\",\n          \"prerequisites\": [],\n          \"is_fallback\": false\n        },\n        {\n          \"id\": \"OutOfScope\",\n          \"name\": \"Out of scope\",\n          \"description\": \"fallback\",\n          \"prerequisites\": [],\n          \"is_fallback\": true\n        }\n      ],\n      \"edges\": [\n        {\"source\": \"Start\", \"target\": \"Verify\", \"label\": \"first\"},\n        {\"source\": \"Verify\", \"target\": \"End\", \"label\": \"complete\"}\n      ],\n      \"allow_unlisted_transitions\": false\n    },\n    \"request\": {\n      \"intent\": \"refund my order\",\n      \"current_state\": \"Start\",\n      \"history\": [],\n      \"prior_executions\": [],\n      \"state\": {},\n      \"metadata\": {}\n    },\n    \"category\": \"general\"\n  }'"
+                "code": "curl -X POST \"$NEOSYNTROPY_API_URL/api/v1/control/runs\" \\\n  -H \"Authorization: Bearer $NEOSYNTROPY_API_KEY\" \\\n  -H \"X-NeoSyntropy-Project-ID: $NEOSYNTROPY_PROJECT_ID\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"graph\": {\n      \"schema_version\": 1,\n      \"nodes\": [\n        {\n          \"id\": \"Verify\",\n          \"name\": \"Verify\",\n          \"description\": \"verify identity\",\n          \"prerequisites\": [],\n          \"is_fallback\": false\n        },\n        {\n          \"id\": \"OutOfScope\",\n          \"name\": \"Out of scope\",\n          \"description\": \"fallback\",\n          \"prerequisites\": [],\n          \"is_fallback\": true\n        }\n      ],\n      \"edges\": [\n        {\"source\": \"Start\", \"target\": \"Verify\", \"label\": \"first\"},\n        {\"source\": \"Verify\", \"target\": \"End\", \"label\": \"complete\"}\n      ],\n      \"allow_unlisted_transitions\": false\n    },\n    \"request\": {\n      \"input\": {\"text\": \"refund my order\"},\n      \"current_state\": \"Verify\",\n      \"history\": [],\n      \"prior_executions\": [],\n      \"state\": {},\n      \"metadata\": {}\n    },\n    \"category\": \"general\"\n  }'"
               }
             },
             {

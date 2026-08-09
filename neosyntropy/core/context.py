@@ -16,7 +16,7 @@ class RunContext(RuntimeModel):
     """
 
     request_id: str
-    intent: str
+    input: dict[str, Any] = Field(default_factory=dict)
     current_state: str
     history: list[Message] = Field(default_factory=list)
     prior_executions: list[ExecutionRecord] = Field(default_factory=list)
@@ -34,7 +34,7 @@ class ContextBuilder:
     def build(self, request: RunRequest) -> RunContext:
         return RunContext(
             request_id=request.request_id,
-            intent=request.intent,
+            input=dict(request.input),
             current_state=request.current_state,
             history=list(request.history),
             prior_executions=list(request.prior_executions),

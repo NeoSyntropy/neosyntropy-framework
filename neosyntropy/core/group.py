@@ -53,7 +53,7 @@ class Group(RuntimeModel):
         *,
         name: str | None = None,
         description: str | None = None,
-        provider: str = "backend",
+        provider: str = "neosyntropy/base",
         prompt: str = "",
         prerequisites: tuple[str, ...] | list[str] = (),
         tools: tuple[str, ...] | list[str] = (),

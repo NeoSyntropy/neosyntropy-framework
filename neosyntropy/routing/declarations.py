@@ -2,16 +2,22 @@
 
 ``DeterministicRouter`` and ``SemanticRouter`` are authored units that compile
 into FSM edges. Targets may be nodes, groups, or other routers.
+
+When a router is the FSM ``entry``, it must declare ``input_schema`` — that
+contract becomes the workflow entry gate.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from pydantic import BaseModel
 
 from ..core.edge import Edge, edge_deterministic, edge_fallback, edge_semantic
 from ..core.group import Group
 from ..core.node import CombineNode, Node
+from ..core.schemas import input_model_schema
 
 # Node | CombineNode | Group | DeterministicRouter | SemanticRouter | str
 RouteTarget = Any
@@ -22,6 +28,24 @@ class _RuleContext:
     """Minimal context exposed to deterministic rule predicates."""
 
     state: dict[str, Any]
+
+
+def _normalize_input_schema(
+    source: type[BaseModel] | dict[str, Any] | None,
+    *,
+    owner: str,
+) -> tuple[dict[str, Any] | None, type[BaseModel] | None]:
+    """Normalize an optional router input contract to a closed JSON Schema."""
+    if source is None:
+        return None, None
+    if isinstance(source, type) and issubclass(source, BaseModel):
+        return input_model_schema(source), source
+    if isinstance(source, dict) and source:
+        return dict(source), None
+    raise ValueError(
+        f"{owner} input_schema must be a pydantic BaseModel class or a "
+        "non-empty JSON Schema object"
+    )
 
 
 def _target_id(target: RouteTarget) -> tuple[str, str]:
@@ -61,6 +85,7 @@ class DeterministicRouter:
 
         auth = DeterministicRouter(
             id="CheckAuth",
+            input_schema=OpenInput,
             rules=[
                 (lambda ctx: ctx.state.get("token_valid") is True, intent_router),
                 (lambda ctx: ctx.state.get("token_valid") is False, login_node),
@@ -71,12 +96,21 @@ class DeterministicRouter:
     id: str
     rules: Sequence[tuple[Callable[..., bool], RouteTarget]]
     description: str = ""
+    input_schema: type[BaseModel] | dict[str, Any] | None = None
+    # Resolved JSON Schema + optional Pydantic model (set in __post_init__).
+    json_schema: dict[str, Any] | None = field(init=False, default=None, repr=False)
+    input_model: type[BaseModel] | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("DeterministicRouter requires id")
         if not self.rules:
             raise ValueError(f"DeterministicRouter {self.id!r} requires rules")
+        schema, model = _normalize_input_schema(
+            self.input_schema, owner=f"DeterministicRouter {self.id!r}"
+        )
+        object.__setattr__(self, "json_schema", schema)
+        object.__setattr__(self, "input_model", model)
 
     def compile(self) -> list[Edge]:
         edges: list[Edge] = []
@@ -106,6 +140,7 @@ class SemanticRouter:
 
         intent = SemanticRouter(
             id="CustomerIntent",
+            input_schema=OpenInput,
             routes={
                 "wants_to_pay": billing_group,
                 "needs_support": support_group,
@@ -119,12 +154,20 @@ class SemanticRouter:
     fallback_node: Node | CombineNode | str | None = None
     description: str = ""
     category: str = "general"
+    input_schema: type[BaseModel] | dict[str, Any] | None = None
+    json_schema: dict[str, Any] | None = field(init=False, default=None, repr=False)
+    input_model: type[BaseModel] | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("SemanticRouter requires id")
         if not self.routes:
             raise ValueError(f"SemanticRouter {self.id!r} requires routes")
+        schema, model = _normalize_input_schema(
+            self.input_schema, owner=f"SemanticRouter {self.id!r}"
+        )
+        object.__setattr__(self, "json_schema", schema)
+        object.__setattr__(self, "input_model", model)
 
     def compile(self) -> list[Edge]:
         edges: list[Edge] = []

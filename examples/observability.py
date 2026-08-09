@@ -26,11 +26,12 @@ def out_of_scope(ctx):
 
 
 graph = FSM(
+        entry="ENTRY",
     nodes=[greet, out_of_scope],
     edges=[
-        Edge(source="Start", target="Greet", kind="deterministic"),
+        Edge(source="ENTRY", target="Greet", kind="deterministic"),
         Edge(source="Greet", target="End", kind="deterministic"),
-    ],
+    ]
 )
 
 
@@ -64,6 +65,6 @@ class ConsoleObserver:
 
 print(graph_manifest(graph))
 result = ControlManager(graph, observer=ConsoleObserver()).run(
-    {"intent": "say hello"}
+    {"input": {"text": "say hello"}}
 )
 print(result.final_state)

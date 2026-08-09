@@ -54,22 +54,46 @@ def graph_manifest(
     """
     return {
         "schema_version": 1,
-        # What the workflow itself takes in at Start.
+        # What the workflow itself takes in at the declared entry.
+        "entry": graph.entry_id,
         "input_schema": graph.input_schema,
         "nodes": [
-            {
-                "id": item.id,
-                "name": item.name,
-                "description": item.description,
-                "prompt": item.prompt,
-                "mode": item.mode,
-                "tools": list(item.tools),
-                "input_schema": item.input_schema,
-                "output_schema": item.output_schema,
-                "group": item.group,
-                "is_fallback": item.is_fallback,
-            }
-            for item in graph.nodes.values()
+            *[
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                    "prompt": item.prompt,
+                    "mode": item.mode,
+                    # Authoring kind (handler / schema / reasoning) — console uses this
+                    # so Python ``@node`` handlers are not shown as schema extraction.
+                    "kind": item.kind,
+                    "tools": list(item.tools),
+                    "input_schema": item.input_schema,
+                    "output_schema": item.output_schema,
+                    "group": item.group,
+                    "is_fallback": item.is_fallback,
+                }
+                for item in graph.nodes.values()
+            ],
+            # Routers are not FSM nodes; still ship their input_schema so the
+            # console can show architects what each hop received.
+            *[
+                {
+                    "id": router.id,
+                    "name": router.id,
+                    "description": getattr(router, "description", "") or "",
+                    "prompt": None,
+                    "mode": None,
+                    "kind": "router",
+                    "tools": [],
+                    "input_schema": getattr(router, "json_schema", None),
+                    "output_schema": None,
+                    "group": None,
+                    "is_fallback": False,
+                }
+                for router in graph.routers.values()
+            ],
         ],
         "edges": [
             {
@@ -110,6 +134,8 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
         groups.append(payload)
     return {
         "schema_version": 1,
+        "entry": graph.entry_id,
+        "input_schema": graph.input_schema,
         "nodes": [
             {
                 "id": item.id,
@@ -142,7 +168,7 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
 class RunObserver(Protocol):
     """Pluggable sink for control-lifecycle telemetry.
 
-    ``input`` and ``output`` carry the run/step debug payloads (intent, state
+    ``input`` and ``output`` carry the run/step debug payloads (run input, state
     snapshots, node results) when the manager captures payloads.
     """
 

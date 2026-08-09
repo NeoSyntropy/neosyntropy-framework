@@ -89,8 +89,6 @@ def _shared_kwargs(
     is_fallback: bool,
     metadata: dict[str, Any] | None,
     provider: str,
-    adapter_id: str | None = None,
-    adapter_version: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": id,
@@ -102,8 +100,6 @@ def _shared_kwargs(
         "is_fallback": is_fallback,
         "metadata": metadata or {},
         "provider": provider,
-        "adapter_id": adapter_id,
-        "adapter_version": adapter_version,
     }
 
 
@@ -115,7 +111,7 @@ class Node(BaseModel):
     description: str = ""
     # Provider assignment is a backend concern. This value remains in the
     # model only to read older graph definitions.
-    provider: str = "backend"
+    provider: str = "neosyntropy/base"
     prompt: str = ""
     prerequisites: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
@@ -132,10 +128,6 @@ class Node(BaseModel):
     output_schema: dict[str, Any]
     group: str | None = None
     is_fallback: bool = False
-    # Inference catalog identity (``node:{adapter_id}@{adapter_version}``).
-    # Required for provider-backed nodes calling the NeoSyntropy inference API.
-    adapter_id: str | None = None
-    adapter_version: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     handler: Callable[..., Any] | None = Field(default=None, exclude=True, repr=False)
     input_model: type[BaseModel] | None = Field(default=None, exclude=True, repr=False)
@@ -214,9 +206,7 @@ def SchemaNode(
     group: str | None = None,
     is_fallback: bool = False,
     metadata: dict[str, Any] | None = None,
-    provider: str = "backend",
-    adapter_id: str | None = None,
-    adapter_version: str | None = None,
+    provider: str = "neosyntropy/base",
 ) -> Node:
     """Provider-backed schema extraction: constrained JSON, no tools."""
     if not prompt:
@@ -232,8 +222,6 @@ def SchemaNode(
             is_fallback=is_fallback,
             metadata=metadata,
             provider=provider,
-            adapter_id=adapter_id,
-            adapter_version=adapter_version,
         ),
         tools=(),
         mode="schema_extraction",
@@ -256,9 +244,7 @@ def ReasoningNode(
     group: str | None = None,
     is_fallback: bool = False,
     metadata: dict[str, Any] | None = None,
-    provider: str = "backend",
-    adapter_id: str | None = None,
-    adapter_version: str | None = None,
+    provider: str = "neosyntropy/base",
 ) -> Node:
     """Provider-backed reasoning: tools allowed, plain-text notes out."""
     if not prompt:
@@ -277,8 +263,6 @@ def ReasoningNode(
             is_fallback=is_fallback,
             metadata=metadata,
             provider=provider,
-            adapter_id=adapter_id,
-            adapter_version=adapter_version,
         ),
         tools=tool_names,
         mode="reasoning",
@@ -308,10 +292,8 @@ class CombineNode:
     group: str | None = None
     is_fallback: bool = False
     metadata: dict[str, Any] | None = None
-    provider: str = "backend"
+    provider: str = "neosyntropy/base"
     schema_prompt: str | None = None
-    adapter_id: str | None = None
-    adapter_version: str | None = None
 
     def __post_init__(self) -> None:
         if not self.prompt:
@@ -343,8 +325,6 @@ class CombineNode:
             group=self.group,
             metadata={**meta, "combine_role": "reasoning"},
             provider=self.provider,
-            adapter_id=self.adapter_id,
-            adapter_version=self.adapter_version,
         )
         object.__setattr__(reasoning, "kind", "combine_part")
 
@@ -362,8 +342,6 @@ class CombineNode:
             group=self.group,
             metadata={**meta, "combine_role": "schema"},
             provider=self.provider,
-            adapter_id=self.adapter_id,
-            adapter_version=self.adapter_version,
         )
         object.__setattr__(schema, "kind", "combine_part")
 
@@ -386,8 +364,8 @@ class NodeContext:
     tools: BoundTools
 
     @property
-    def intent(self) -> str:
-        return self.run.intent
+    def input(self) -> dict[str, Any]:
+        return self.run.input
 
     @property
     def state(self) -> dict[str, Any]:
@@ -434,7 +412,7 @@ def node(
     *,
     name: str | None = None,
     description: str | None = None,
-    provider: str = "backend",
+    provider: str = "neosyntropy/base",
     prompt: str = "",
     prerequisites: tuple[str, ...] | list[str] = (),
     tools: tuple[str, ...] | list[str] = (),

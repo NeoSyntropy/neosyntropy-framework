@@ -76,11 +76,12 @@ class ScriptedProvider:
 
 def build_graph() -> FSM:
     return FSM(
+        entry="Support",
         nodes=[
             ReasoningNode(
                 id="Support",
                 description="Answer order questions",
-                provider="inference",
+                provider="neosyntropy/base",
                 prompt="Help the customer with their order.",
                 tools=("lookup_order",),
                 input_schema=OpenInput,
@@ -94,8 +95,8 @@ def build_graph() -> FSM:
             ),
         ],
         edges=[
-            Edge(source="Start", target="Support", kind="deterministic"),
             Edge(source="Support", target="End", kind="deterministic"),
+            Edge(source="Support", target="OutOfScope", kind="fallback"),
         ],
     )
 
@@ -113,11 +114,13 @@ def show(title: str, result) -> None:
                 print(f"  [{verdict}] {record.tool} {record.arguments} {record.error or ''}")
 
 
-def run(title: str, replies: list[str], intent: str) -> None:
+def run(title: str, replies: list[str], text: str) -> None:
     manager = ControlManager(
-        build_graph(), providers={"inference": ScriptedProvider(replies)}, tools=registry
+        build_graph(),
+        providers={"neosyntropy/base": ScriptedProvider(replies)},
+        tools=registry,
     )
-    show(title, manager.run(RunRequest(intent=intent)))
+    show(title, manager.run(RunRequest(input={"text": text})))
 
 
 def main() -> None:

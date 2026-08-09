@@ -43,7 +43,9 @@ class JsonlDecisionLogger:
         record: dict[str, Any] = {
             "timestamp": time.time(),
             "node": context.current_state,
-            "user_query": context.intent,
+            "user_query": json.dumps(
+                context.input, sort_keys=True, separators=(",", ":"), default=str
+            ),
             "candidates": {
                 candidate.name: candidate.description for candidate in candidates
             },

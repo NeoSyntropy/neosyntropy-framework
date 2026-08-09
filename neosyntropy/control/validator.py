@@ -134,6 +134,9 @@ class PlanValidator:
         for step in plan.execution_plan:
             targets = {candidates[index].node_id for index in step}
             for target in targets:
+                # Executing the node we are already on (entry / first visit).
+                if target in sources:
+                    continue
                 if not any(table.permits(source, target) for source in sources):
                     errors.append(
                         f"no legal transition to {target!r} from {sorted(sources)}"

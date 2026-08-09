@@ -10,11 +10,9 @@ Edge kinds:
 - ``semantic`` — scopes the semantic router to a node or group
 - ``fallback`` — used when neither of the above yields a route
 
-``input_schema`` declares the entry contract: the state a run must supply
-when it starts at ``Start``. It is the counterpart to a node's
-``output_schema`` — the workflow says what it takes in, not just what each
-node hands back — and it is enforced fail-closed before any selection or
-routing happens.
+``entry`` is required. It is a node or router with ``input_schema``; that
+schema is the workflow entry contract (derived onto ``FSM.input_schema``).
+Runs begin at ``entry.id`` — there is no synthetic Start vertex.
 """
 from __future__ import annotations
 
@@ -28,10 +26,9 @@ from pydantic import BaseModel
 from .edge import Edge, TransitionTable, edge_deterministic, edge_fallback
 from .group import Group, expand_authored_groups
 from .node import CombineNode, Node
-from .schemas import input_model_schema
 
-START = "Start"
 END = "End"
+_FORBIDDEN_START = "Start"
 
 FSMNode = Node | CombineNode
 
@@ -95,18 +92,80 @@ class FSMValidationError(ValueError):
         super().__init__("invalid FSM: " + "; ".join(errors))
 
 
-def _entry_schema(source: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
-    """Normalize an entry contract to a closed JSON Schema object."""
-    if isinstance(source, type) and issubclass(source, BaseModel):
-        return input_model_schema(source)
-    if isinstance(source, dict) and source:
-        return dict(source)
+def _resolve_entry_id(entry: Any) -> str:
+    """Return the state id for an authored entry (router, node, or id)."""
+    from ..routing.declarations import DeterministicRouter, SemanticRouter
+
+    if isinstance(entry, (DeterministicRouter, SemanticRouter)):
+        return entry.id
+    if isinstance(entry, CombineNode):
+        return entry.id
+    if isinstance(entry, Node):
+        return entry.id
+    if isinstance(entry, str) and entry.strip():
+        return entry
     raise FSMValidationError(
-        [
-            "input_schema must be a pydantic BaseModel class or a "
-            "non-empty JSON Schema object"
-        ]
+        [f"entry must be a router, node, or id; got {type(entry)!r}"]
     )
+
+
+def _entry_contract(
+    entry: Any,
+    entry_id: str,
+    nodes: dict[str, Node],
+    routers: dict[str, Any],
+) -> tuple[dict[str, Any], type[BaseModel] | None]:
+    """Derive the FSM entry input_schema from the entry node or router."""
+    from ..routing.declarations import DeterministicRouter, SemanticRouter
+
+    if isinstance(entry, (DeterministicRouter, SemanticRouter)):
+        schema = entry.json_schema
+        if not schema:
+            raise FSMValidationError(
+                [
+                    f"entry router {entry_id!r} requires input_schema "
+                    "(it is the workflow entry contract)"
+                ]
+            )
+        return dict(schema), entry.input_model
+
+    if isinstance(entry, CombineNode):
+        node = nodes.get(entry.id)
+        if node is None or not node.input_schema:
+            raise FSMValidationError(
+                [f"entry CombineNode {entry_id!r} requires input_schema"]
+            )
+        return dict(node.input_schema), node.input_model
+
+    if isinstance(entry, Node):
+        if not entry.input_schema:
+            raise FSMValidationError(
+                [f"entry node {entry_id!r} requires input_schema"]
+            )
+        return dict(entry.input_schema), entry.input_model
+
+    # String id — resolve against assembled nodes/routers.
+    if entry_id in routers:
+        router = routers[entry_id]
+        schema = getattr(router, "json_schema", None)
+        if not schema:
+            raise FSMValidationError(
+                [
+                    f"entry router {entry_id!r} requires input_schema "
+                    "(it is the workflow entry contract)"
+                ]
+            )
+        return dict(schema), getattr(router, "input_model", None)
+    node = nodes.get(entry_id)
+    if node is None:
+        raise FSMValidationError(
+            [f"entry {entry_id!r} is not a known node or router"]
+        )
+    if not node.input_schema:
+        raise FSMValidationError(
+            [f"entry node {entry_id!r} requires input_schema"]
+        )
+    return dict(node.input_schema), node.input_model
 
 
 class FSM:
@@ -114,22 +173,17 @@ class FSM:
         self,
         *,
         nodes: Iterable[FSMNode],
+        entry: Any,
         edges: Iterable[Edge | dict[str, Any]] = (),
         groups: Iterable[Group | str] = (),
         routers: Iterable[Any] = (),
-        entry: Any = None,
-        input_schema: type[BaseModel] | dict[str, Any] | None = None,
         allow_unlisted_transitions: bool = False,
         validate_reachability: bool = True,
     ):
-        self.input_model: type[BaseModel] | None = (
-            input_schema
-            if isinstance(input_schema, type) and issubclass(input_schema, BaseModel)
-            else None
-        )
-        self.input_schema: dict[str, Any] | None = (
-            _entry_schema(input_schema) if input_schema is not None else None
-        )
+        if entry is None:
+            raise FSMValidationError(
+                ["FSM requires entry= (a node or router with input_schema)"]
+            )
 
         from ..routing.declarations import DeterministicRouter, SemanticRouter
 
@@ -180,34 +234,32 @@ class FSM:
                 [f"router id clashes with node id: {sorted(overlap)}"]
             )
 
+        self.entry_id = _resolve_entry_id(entry)
+        if self.entry_id == _FORBIDDEN_START:
+            raise FSMValidationError(
+                ["entry cannot be the removed synthetic 'Start' state"]
+            )
+        if (
+            self.entry_id not in self.nodes
+            and self.entry_id not in self.router_ids
+        ):
+            raise FSMValidationError(
+                [f"entry {self.entry_id!r} is not a known node or router"]
+            )
+
+        self.input_schema, self.input_model = _entry_contract(
+            entry, self.entry_id, self.nodes, self.routers
+        )
+
         declared = [
             edge if isinstance(edge, Edge) else Edge.model_validate(edge)
             for edge in edges
         ]
-        entry_edges: list[Edge] = []
-        if entry is not None:
-            from ..core.node import Node as NodeType
-
-            if isinstance(entry, (DeterministicRouter, SemanticRouter)):
-                entry_id = entry.id
-            elif isinstance(entry, CombineNode):
-                entry_id = entry.id
-            elif isinstance(entry, NodeType):
-                entry_id = entry.id
-            elif isinstance(entry, str):
-                entry_id = entry
-            else:
-                raise FSMValidationError(
-                    [f"entry must be a router, node, or id; got {type(entry)!r}"]
-                )
-            entry_edges.append(edge_deterministic(START, entry_id))
-
         # Router/Combine/group auto edges first; author edges may still add more.
         self.edges: list[Edge] = [
             *auto_edges,
             *router_edges,
             *group_edges,
-            *entry_edges,
             *declared,
         ]
         self.allow_unlisted_transitions = allow_unlisted_transitions
@@ -225,13 +277,25 @@ class FSM:
         errors: list[str] = []
         if not self.nodes:
             errors.append("graph must define at least one node")
+        if not self.entry_id:
+            errors.append("FSM requires entry=")
+        if not self.input_schema:
+            errors.append(
+                "FSM entry must declare input_schema"
+            )
 
-        known_nodes = set(self.nodes) | set(self.router_ids) | {START, END}
+        known_nodes = set(self.nodes) | set(self.router_ids) | {END}
         for edge in self.edges:
+            if edge.source == _FORBIDDEN_START or edge.target == _FORBIDDEN_START:
+                errors.append(
+                    "edges must not use the removed synthetic 'Start' state; "
+                    "set entry= instead"
+                )
+                continue
             if edge.source not in known_nodes:
                 errors.append(
                     f"edge source {edge.source!r} is not a known node, "
-                    f"router, Start, or End"
+                    f"router, or End"
                 )
             if edge.target_kind == "group":
                 if edge.target not in self.groups:
@@ -241,7 +305,7 @@ class FSM:
             elif edge.target not in known_nodes:
                 errors.append(
                     f"edge target {edge.target!r} is not a known node, "
-                    f"router, Start, or End"
+                    f"router, or End"
                 )
 
         fallback_count = sum(item.is_fallback for item in self.nodes.values())
@@ -264,10 +328,10 @@ class FSM:
             )
 
         for group in self.groups.values():
-            entry_id = group.entry_id()
-            if entry_id is not None and entry_id not in known_nodes:
+            group_entry = group.entry_id()
+            if group_entry is not None and group_entry not in known_nodes:
                 errors.append(
-                    f"group {group.name!r} entry {entry_id!r} is not a known "
+                    f"group {group.name!r} entry {group_entry!r} is not a known "
                     f"node or router"
                 )
 
@@ -282,23 +346,23 @@ class FSM:
     def _concrete_targets(self, edge: Edge) -> set[str]:
         if edge.target_kind == "group":
             group = self.groups.get(edge.target)
-            entry_id = group.entry_id() if group is not None else None
-            if entry_id is not None:
-                return {entry_id}
+            group_entry = group.entry_id() if group is not None else None
+            if group_entry is not None:
+                return {group_entry}
             return {node.id for node in self.nodes_in_group(edge.target)}
         return {edge.target}
 
     def _validate_reachability(self, errors: list[str]) -> None:
-        """Start/End discipline with group-target expansion.
+        """Entry/End discipline with group-target expansion.
 
         Applies only to vertices that participate in edges: every such vertex
-        must be reachable from Start, and (when End is used) must be able to
-        reach End. The fallback node is exempt — it is a safe stop, not a
-        path member. Capability-only nodes (no edges) are exempt as well;
+        must be reachable from the declared entry, and (when End is used) must
+        be able to reach End. The fallback node is exempt — it is a safe stop,
+        not a path member. Capability-only nodes (no edges) are exempt as well;
         the plan validator fail-closes on them unless unlisted transitions
         are explicitly allowed.
         """
-        participants: set[str] = set()
+        participants: set[str] = {self.entry_id}
         forward: dict[str, set[str]] = {}
         backward: dict[str, set[str]] = {}
         for edge in self.edges:
@@ -312,18 +376,17 @@ class FSM:
                 backward.setdefault(target, set()).add(edge.source)
 
         fallback_id = self.fallback_node.id
-        if START not in participants:
-            errors.append("edges are defined but none originate from 'Start'")
-            return
-
-        reachable = _flood(START, forward)
+        reachable = _flood(self.entry_id, forward)
         unreachable = sorted(
             vertex
             for vertex in participants
-            if vertex not in reachable and vertex not in {START, fallback_id}
+            if vertex not in reachable
+            and vertex not in {self.entry_id, fallback_id}
         )
         if unreachable:
-            errors.append(f"states unreachable from Start: {unreachable}")
+            errors.append(
+                f"states unreachable from entry {self.entry_id!r}: {unreachable}"
+            )
 
         if END in participants:
             can_finish = _flood(END, backward)
@@ -337,16 +400,17 @@ class FSM:
 
     # -- entry contract -----------------------------------------------------
 
-    def entry_input_error(self, state: Mapping[str, Any]) -> str | None:
-        """Return why ``state`` fails the entry contract, or None when it holds.
+    def entry_input_error(self, payload: Mapping[str, Any]) -> str | None:
+        """Return why ``payload`` fails the entry input contract, or None when it holds.
 
-        Only meaningful for a run starting at ``Start``: later cycles resume
-        with state the workflow itself produced.
+        Only meaningful for a run starting at ``entry_id``. The contract is
+        derived from the entry node/router ``input_schema`` and validates the
+        run ``input`` channel — not workflow ``state``.
         """
-        if self.input_schema is None:
-            return None
+        if not self.input_schema:
+            return "graph is missing required entry input_schema"
         try:
-            jsonschema.validate(instance=dict(state), schema=self.input_schema)
+            jsonschema.validate(instance=dict(payload), schema=self.input_schema)
         except jsonschema.exceptions.ValidationError as exc:
             return f"entry input does not match the graph input schema: {exc.message}"
         except jsonschema.exceptions.SchemaError as exc:
@@ -464,17 +528,19 @@ class FSM:
         *,
         client: Any = None,
         tools: Any = None,
-        intent: str | None = None,
         state: Mapping[str, Any] | None = None,
         until_end: bool = True,
         max_cycles: int = 32,
         **kwargs: Any,
     ) -> Any:
-        """Run the FSM. Workflows always begin at ``Start`` — do not pass it.
+        """Run the FSM. Workflows begin at ``entry`` — do not pass a Start state.
 
         Application code::
 
-            result = fsm.run(intent="...", state={...}, client=client)
+            result = fsm.run(EntryInput(...), state={...}, client=client)
+
+        ``request`` (or the first positional) is the run ``input`` and must match
+        the entry ``input_schema``. ``state`` is a separate mutable workflow bag.
 
         By default ``until_end=True`` advances cycles until ``End`` or rejection.
         Pass ``until_end=False`` for a single control cycle (resume via
@@ -484,7 +550,6 @@ class FSM:
             request,
             client=client,
             tools=tools,
-            intent=intent,
             state=state,
             until_end=until_end,
             max_cycles=max_cycles,
@@ -497,7 +562,6 @@ class FSM:
         *,
         client: Any = None,
         tools: Any = None,
-        intent: str | None = None,
         state: Mapping[str, Any] | None = None,
         until_end: bool = True,
         max_cycles: int = 32,
@@ -508,7 +572,7 @@ class FSM:
 
         # Reuse the sync loop via a thread when callers already use arun with
         # until_end; single-cycle path stays fully async.
-        payload = self._normalize_request(request, intent=intent, state=state)
+        payload = self._normalize_request(request, state=state)
         manager = self._control_manager(client=client, tools=tools, **kwargs)
         if not until_end:
             return await manager.arun(payload)
@@ -527,43 +591,63 @@ class FSM:
         self,
         request: Any,
         *,
-        intent: str | None = None,
         state: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from pydantic import BaseModel
         from .models import RunRequest
 
+        payload: dict[str, Any] = {}
         if request is None:
-            if not intent:
-                raise ValueError("fsm.run requires intent= or a RunRequest")
-            payload: dict[str, Any] = {"intent": intent, "state": dict(state or {})}
+            payload = {"input": {}, "state": dict(state or {})}
         elif isinstance(request, RunRequest):
             payload = request.model_dump()
-            if intent is not None:
-                payload["intent"] = intent
             if state is not None:
                 payload["state"] = dict(state)
+        elif isinstance(request, BaseModel):
+            payload = {"input": request.model_dump(), "state": dict(state or {})}
         elif isinstance(request, Mapping):
-            payload = dict(request)
-            if intent is not None:
-                payload["intent"] = intent
-            if state is not None:
-                payload["state"] = dict(state)
+            req_dict = dict(request)
+            if "prior_executions" in req_dict or "current_state" in req_dict:
+                payload = req_dict
+                if "input" not in payload and "intent" in payload:
+                    # Legacy resume payloads used intent= as free text.
+                    legacy = payload.pop("intent")
+                    payload["input"] = (
+                        legacy if isinstance(legacy, dict) else {"text": str(legacy)}
+                    )
+                if state is not None:
+                    payload["state"] = dict(state)
+            elif "input" in req_dict or "state" in req_dict:
+                payload = {
+                    "input": dict(req_dict.get("input") or {}),
+                    "state": dict(state if state is not None else req_dict.get("state") or {}),
+                }
+                for key in ("current_state", "prior_executions", "request_id", "metadata", "history"):
+                    if key in req_dict:
+                        payload[key] = req_dict[key]
+            else:
+                payload = {"input": req_dict, "state": dict(state or {})}
         else:
             raise TypeError(
-                f"request must be RunRequest, mapping, or omitted; got {type(request)!r}"
+                f"request must be RunRequest, BaseModel, mapping, or omitted; got {type(request)!r}"
             )
 
-        # Workflows always enter at Start unless the caller resumes mid-path.
-        payload.setdefault("current_state", START)
+        # Workflows enter at the declared entry unless the caller resumes mid-path.
+        payload.setdefault("current_state", self.entry_id)
         if not payload.get("current_state"):
-            payload["current_state"] = START
+            payload["current_state"] = self.entry_id
         payload.setdefault("prior_executions", [])
+        if "input" not in payload:
+            payload["input"] = {}
+        elif not isinstance(payload["input"], dict):
+            payload["input"] = {"text": str(payload["input"])}
         payload.setdefault("state", {})
+        payload.pop("intent", None)
         return payload
 
     def _follow_terminal_edge(self, current: str, state: Mapping[str, Any]) -> str:
         """If the only deterministic exit is End, advance without another node run."""
-        if current in {START, END}:
+        if current == END:
             return current
         matching = self.matching_deterministic(current, dict(state))
         if len(matching) == 1 and matching[0].target == END:
@@ -576,7 +660,6 @@ class FSM:
         *,
         client: Any = None,
         tools: Any = None,
-        intent: str | None = None,
         state: Mapping[str, Any] | None = None,
         until_end: bool = True,
         max_cycles: int = 32,
@@ -585,7 +668,7 @@ class FSM:
         if max_cycles < 1:
             raise ValueError("max_cycles must be positive")
 
-        payload = self._normalize_request(request, intent=intent, state=state)
+        payload = self._normalize_request(request, state=state)
         manager = self._control_manager(client=client, tools=tools, **kwargs)
 
         if not until_end:
@@ -593,10 +676,10 @@ class FSM:
 
         last = None
         prior: list[dict[str, Any]] = list(payload.get("prior_executions") or [])
-        current = str(payload.get("current_state") or START)
+        current = str(payload.get("current_state") or self.entry_id)
         initial_state = current
         snapshot = dict(payload.get("state") or {})
-        intent_text = str(payload["intent"])
+        run_input = dict(payload.get("input") or {})
         all_steps: list[Any] = []
         all_transitions: list[str] = []
         all_gates: list[Any] = []
@@ -605,7 +688,7 @@ class FSM:
         for _ in range(max_cycles):
             cycle_request = {
                 **payload,
-                "intent": intent_text,
+                "input": run_input,
                 "current_state": current,
                 "state": snapshot,
                 "prior_executions": prior,
@@ -711,12 +794,12 @@ def Workflow(
     sequence: list[FSMNode] | tuple[FSMNode, ...],
     *,
     fallback: FSMNode | None = None,
-    input_schema: type[BaseModel] | dict[str, Any] | None = None,
 ) -> FSM:
     """Build a linear FSM from an ordered node list.
 
-    Developers pass the happy-path sequence; ``Workflow`` wires
-    ``Start → … → End`` and the optional fallback. No manual edges required.
+    Developers pass the happy-path sequence; ``Workflow`` sets ``entry`` to
+    the first step, wires ``entry → … → End``, and the optional fallback.
+    The entry node's ``input_schema`` is the workflow contract.
 
     ``CombineNode`` units expand as usual: the next step links from
     ``{id}.Schema``, not from the reasoning entry.
@@ -737,18 +820,19 @@ def Workflow(
             ["fallback cannot be a CombineNode; use SchemaNode(..., is_fallback=True)"]
         )
 
-    edges: list[Edge] = [edge_deterministic(START, _entry_id(steps[0]))]
+    first = steps[0]
+    edges: list[Edge] = []
     for index in range(len(steps) - 1):
         edges.append(
             edge_deterministic(_exit_id(steps[index]), _entry_id(steps[index + 1]))
         )
     edges.append(edge_deterministic(_exit_id(steps[-1]), END))
-    edges.append(edge_fallback(START, fallback.id))
+    edges.append(edge_fallback(_entry_id(first), fallback.id))
 
     return FSM(
         nodes=[*steps, fallback],
+        entry=first,
         edges=edges,
-        input_schema=input_schema,
     )
 
 

@@ -30,7 +30,7 @@ from ..backend import (
     Client,
 )
 from ..core.context import ContextBuilder, RunContext
-from ..core.graph import END, START, FSM
+from ..core.graph import END, FSM
 from ..core.models import (
     AuditRecord,
     Candidate,
@@ -101,21 +101,25 @@ class ControlManager:
         context_builder: ContextBuilder | None = None,
         decision_logger: DecisionLogger | None = None,
         observer: RunObserver | None = None,
-        telemetry_timeout: float = 2.0,
+        telemetry_timeout: float | None = None,
         capture_payloads: bool = True,
     ):
         self.graph = graph
         resolved_backend = _resolve_backend(client, backend=backend)
         self._backend = resolved_backend
+        if telemetry_timeout is None:
+            # Prefer the client's telemetry budget so slow DBs don't create
+            # orphan runs (run_started commits after the observer timed out).
+            telemetry_timeout = (
+                float(getattr(resolved_backend, "telemetry_timeout", 2.0) or 2.0)
+                if resolved_backend is not None
+                else 2.0
+            )
         backend_providers: dict[str, Provider] = {}
         if resolved_backend is not None:
             backend_provider = BackendProvider(resolved_backend)
             backend_providers = {
-                "backend": backend_provider,
-                "inference": backend_provider,
-                # Compatibility for graphs authored before provider selection
-                # moved behind the backend.
-                "slm": backend_provider,
+                "neosyntropy/base": backend_provider,
             }
         self.providers = (
             providers
@@ -176,6 +180,10 @@ class ControlManager:
             if isinstance(request, RunRequest)
             else RunRequest.model_validate(request)
         )
+        if not typed_request.current_state:
+            typed_request = typed_request.model_copy(
+                update={"current_state": self.graph.entry_id}
+            )
         context = self.context_builder.build(typed_request)
         run_id = await self._observation_started(context)
         entry_check = self._entry_input_check(context)
@@ -247,27 +255,89 @@ class ControlManager:
         )
         return result
 
-    def _apply_local_router_hops(self, context: RunContext) -> RunContext:
+    def _apply_local_router_hops(
+        self, context: RunContext
+    ) -> tuple[RunContext, list[tuple[str, str]]]:
         """Follow unique guard-matching hops to routers/End before remote calls.
 
         DeterministicRouter guards are not on the wire; resolve them locally so
-        the backend receives a concrete current_state.
+        the backend receives a concrete current_state. Returns the hops taken so
+        telemetry can show router stations on the run path.
+
+        Never hop off an actionable node that has not succeeded yet — entry
+        nodes with ``→ End`` must still execute before the terminal transition.
         """
         state = context.current_state
+        hops: list[tuple[str, str]] = []
+        already_ran = {
+            item.node_id
+            for item in context.prior_executions
+            if item.status == "succeeded"
+        }
         for _ in range(16):
+            standing = self.graph.nodes.get(state)
+            if (
+                standing is not None
+                and not standing.is_fallback
+                and state not in already_ran
+            ):
+                break
             matching = self.graph.matching_deterministic(state, context.state)
             if len(matching) != 1:
                 break
             target = matching[0].target
             if target == END or self.graph.is_router_state(target):
+                hops.append((state, target))
                 state = target
                 if target == END:
                     break
                 continue
             break
         if state == context.current_state:
-            return context
-        return context.model_copy(update={"current_state": state})
+            return context, []
+        return context.model_copy(update={"current_state": state}), hops
+
+    def _router_hop_payload(
+        self,
+        source: str,
+        target: str,
+        *,
+        reason: str,
+        context: RunContext,
+        state: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Telemetry for a router hop, including the input the router evaluated."""
+        payload: dict[str, Any] = {
+            "source": source,
+            "target": target,
+            "reason": reason,
+            "router_hop": True,
+        }
+        if self.capture_payloads:
+            payload["input"] = {
+                "input": dict(context.input),
+                "current_state": source,
+                "state": dict(state if state is not None else context.state),
+            }
+        return payload
+
+    async def _observe_transitions(
+        self,
+        run_id: str | None,
+        transitions: list[tuple[str, str]],
+        *,
+        reason: str,
+        context: RunContext,
+    ) -> None:
+        """Emit transition_committed for local router hops (not node executions)."""
+        for source, target in transitions:
+            await self._observe(
+                run_id,
+                "transition_committed",
+                self._router_hop_payload(
+                    source, target, reason=reason, context=context
+                ),
+            )
 
     async def _run_remote_control(
         self,
@@ -277,7 +347,13 @@ class ControlManager:
     ) -> RunResult:
         """Backend owns select/route/validate/commit; client only executes handlers."""
         assert self._backend is not None
-        context = self._apply_local_router_hops(context)
+        context, local_hops = self._apply_local_router_hops(context)
+        await self._observe_transitions(
+            observation_run_id,
+            local_hops,
+            reason="deterministic_router",
+            context=context,
+        )
         if context.current_state == END:
             checks = list(initial_checks or [])
             return self._result(
@@ -290,7 +366,7 @@ class ControlManager:
                 checks,
                 completed=True,
                 rejection=None,
-                committed=[],
+                committed=[f"{source}->{target}" for source, target in local_hops],
             )
         # Multi-rule DeterministicRouter: evaluate guards locally, then short-
         # circuit through the offline cycle (backend cannot see guards).
@@ -304,7 +380,7 @@ class ControlManager:
                 )
 
         request_payload = {
-            "intent": context.intent,
+            "input": dict(context.input),
             "request_id": context.request_id,
             "current_state": context.current_state,
             "history": [
@@ -345,22 +421,6 @@ class ControlManager:
             checks.append(guard_check)
             if not guard_check.passed:
                 rejection = guard_check.message or "edge guard denied"
-                view = await self._backend.submit_control_results(
-                    str(view["run_id"]),
-                    client_rejection=rejection,
-                )
-                await self._observe(
-                    observation_run_id,
-                    "step_completed",
-                    self._step_completed_payload(
-                        step_payload, "rejected", rejection=rejection
-                    ),
-                )
-                break
-            input_check = self._step_input_check(node_ids, step_context.state)
-            checks.append(input_check)
-            if not input_check.passed:
-                rejection = input_check.message or "node input schema violated"
                 view = await self._backend.submit_control_results(
                     str(view["run_id"]),
                     client_rejection=rejection,
@@ -467,15 +527,35 @@ class ControlManager:
             for transition in transitions[observed_transitions:]:
                 source, separator, target = str(transition).partition("->")
                 if separator:
-                    await self._observe(
-                        observation_run_id,
-                        "transition_committed",
-                        {
-                            "step": step_number,
-                            "source": source,
-                            "target": target,
-                        },
-                    )
+                    source = source.strip()
+                    target = target.strip()
+                    router_hop = self.graph.is_router_state(source)
+                    if router_hop:
+                        hop_payload = self._router_hop_payload(
+                            source,
+                            target,
+                            reason="semantic_router",
+                            context=context,
+                            state=dict(view.get("state") or step_context.state),
+                        )
+                        hop_payload["step"] = step_number
+                        await self._observe(
+                            observation_run_id,
+                            "transition_committed",
+                            hop_payload,
+                        )
+                    else:
+                        await self._observe(
+                            observation_run_id,
+                            "transition_committed",
+                            {
+                                "step": step_number,
+                                "source": source,
+                                "target": target,
+                                "reason": "transition",
+                                "router_hop": False,
+                            },
+                        )
             observed_transitions = len(transitions)
             await self._observe(
                 observation_run_id,
@@ -503,6 +583,8 @@ class ControlManager:
                     message=rejection,
                 )
             )
+        remote_committed = list(view.get("committed_transitions") or [])
+        local_committed = [f"{source}->{target}" for source, target in local_hops]
         return self._result(
             context,
             None,
@@ -513,7 +595,7 @@ class ControlManager:
             checks,
             completed=bool(view.get("completed")),
             rejection=rejection if isinstance(rejection, str) else None,
-            committed=list(view.get("committed_transitions") or []),
+            committed=[*local_committed, *remote_committed],
         )
 
     def _remote_guard_check(
@@ -523,6 +605,9 @@ class ControlManager:
         for node_id in node_ids:
             definition = self.graph.nodes[node_id]
             if definition.is_fallback:
+                continue
+            # Already standing on the planned node (entry / first visit).
+            if node_id in frontier:
                 continue
             allowed = any(
                 self.graph.allows(source, node_id)
@@ -550,7 +635,18 @@ class ControlManager:
     ) -> RunResult:
         # Router / End hop: exactly one deterministic edge to a non-executable
         # state (compiled router id or End) — commit the transition only.
+        # Never skip an actionable node that has not run yet (entry).
         hop = self._deterministic_hop_target(context)
+        if hop is not None:
+            standing = self.graph.nodes.get(context.current_state)
+            if standing is not None and not standing.is_fallback:
+                already_ran = {
+                    item.node_id
+                    for item in context.prior_executions
+                    if item.status == "succeeded"
+                }
+                if context.current_state not in already_ran:
+                    hop = None
         if hop is not None:
             checks = list(initial_checks or [])
             checks.append(
@@ -560,6 +656,16 @@ class ControlManager:
                     passed=True,
                     message=f"{context.current_state!r} -> {hop!r}",
                 )
+            )
+            await self._observe(
+                run_id,
+                "transition_committed",
+                self._router_hop_payload(
+                    context.current_state,
+                    hop,
+                    reason="router_hop",
+                    context=context,
+                ),
             )
             return self._result(
                 context,
@@ -574,9 +680,13 @@ class ControlManager:
                 committed=[f"{context.current_state}->{hop}"],
             )
 
-        # Deterministic short-circuit: exactly one matching edge commits
-        # without the semantic router.
-        short_circuit = self._deterministic_plan(context)
+        # Standing on an executable node that has not run yet (typical for
+        # entry): execute that node first. Outgoing edges apply on later cycles.
+        short_circuit = self._current_node_plan(context)
+        if short_circuit is None:
+            # Deterministic short-circuit: exactly one matching edge commits
+            # without the semantic router.
+            short_circuit = self._deterministic_plan(context)
         if short_circuit is not None:
             candidates, plan = short_circuit
         elif self.graph.semantic_candidate_ids(context.current_state) is None:
@@ -630,7 +740,13 @@ class ControlManager:
         completed = True
         rejection: str | None = None
 
-        for step_number, indices in enumerate(plan.execution_plan):
+        # Mutable work queue so unique deterministic edges to the next node
+        # (Investigate → ExtractTicket) append as further steps in this cycle.
+        candidates = list(candidates)
+        work: list[list[int]] = [list(step) for step in plan.execution_plan]
+        step_number = 0
+        while step_number < len(work):
+            indices = work[step_number]
             step_targets = {candidates[index].node_id for index in indices}
             step_context = context.model_copy(
                 update={
@@ -651,19 +767,6 @@ class ControlManager:
             checks.append(guard_check)
             if not guard_check.passed:
                 completed, rejection = False, guard_check.message
-                await self._observe(
-                    run_id,
-                    "step_completed",
-                    self._step_completed_payload(
-                        step_payload, "rejected", rejection=rejection
-                    ),
-                )
-                break
-
-            input_check = self._step_input_check(sorted(step_targets), step_context.state)
-            checks.append(input_check)
-            if not input_check.passed:
-                completed, rejection = False, input_check.message
                 await self._observe(
                     run_id,
                     "step_completed",
@@ -717,23 +820,31 @@ class ControlManager:
                 )
                 break
 
-            # After a single node finishes without next_state, follow a unique
-            # deterministic edge to a router or End (group add_edge / terminals).
-            if merged_next is None and len(step_targets) == 1:
+            # Executor defaults next_state to the node itself. Still follow a
+            # unique deterministic edge to End / a router. Edges to another
+            # actionable node are chained as an extra step after commit (below).
+            if len(step_targets) == 1:
                 only = next(iter(step_targets))
-                matching = self.graph.matching_deterministic(only, preview_state)
-                if len(matching) == 1:
-                    auto_target = matching[0].target
-                    if auto_target == END or self.graph.is_router_state(auto_target):
-                        results = [
-                            (
-                                result.model_copy(update={"next_state": auto_target})
-                                if result.next_state is None
-                                else result
+                if merged_next in (None, only):
+                    matching = self.graph.matching_deterministic(only, preview_state)
+                    if len(matching) == 1:
+                        auto_target = matching[0].target
+                        if auto_target == END or self.graph.is_router_state(
+                            auto_target
+                        ):
+                            results = [
+                                (
+                                    result.model_copy(
+                                        update={"next_state": auto_target}
+                                    )
+                                    if result.next_state in (None, only)
+                                    else result
+                                )
+                                for result in results
+                            ]
+                            preview_state, merged_next = state_manager.preview(
+                                results
                             )
-                            for result in results
-                        ]
-                        preview_state, merged_next = state_manager.preview(results)
 
             step_checks = self._result_stage_checks(
                 context, results, preview_state, state_manager.current_state
@@ -761,18 +872,25 @@ class ControlManager:
 
             previous_state = state_manager.current_state
             await state_manager.apply_step(results)
-            if state_manager.current_state != previous_state:
-                transition = f"{previous_state}->{state_manager.current_state}"
+            hop_targets = _attribution_hop_targets(
+                previous_state,
+                state_manager.current_state,
+                results,
+            )
+            cursor = previous_state
+            for target in hop_targets:
+                transition = f"{cursor}->{target}"
                 committed.append(transition)
                 await self._observe(
                     run_id,
                     "transition_committed",
                     {
                         "step": step_number,
-                        "source": previous_state,
-                        "target": state_manager.current_state,
+                        "source": cursor,
+                        "target": target,
                     },
                 )
+                cursor = target
             steps.append(ExecutionStepResult(step=step_number, results=results))
             frontier = step_targets
 
@@ -799,6 +917,28 @@ class ControlManager:
                     state=state_manager.snapshot(),
                 ),
             )
+            step_number += 1
+            if step_number < len(work):
+                continue
+            chained = self._chain_deterministic_node_step(
+                state_manager.current_state,
+                state_manager.snapshot(),
+                candidates,
+                {
+                    item.node_id
+                    for item in context.prior_executions
+                    if item.status == "succeeded"
+                }
+                | {
+                    result.node_id
+                    for step in steps
+                    for result in step.results
+                    if result.status == "succeeded"
+                },
+            )
+            if chained is not None:
+                candidates, next_indices = chained
+                work.append(next_indices)
 
         return self._result(
             context,
@@ -820,7 +960,7 @@ class ControlManager:
         if not self.capture_payloads:
             return None
         return {
-            "intent": context.intent,
+            "input": dict(context.input),
             "current_state": context.current_state,
             "history": [
                 {"role": message.role, "content": message.content}
@@ -925,40 +1065,16 @@ class ControlManager:
         return []
 
     def _entry_input_check(self, context: RunContext) -> GateCheck | None:
-        """Built-in entry gate: a run starting at Start must match input_schema."""
-        if self.graph.input_schema is None or context.current_state != START:
+        """Built-in entry gate: run input must match entry input_schema."""
+        if context.current_state != self.graph.entry_id:
             return None
-        message = self.graph.entry_input_error(context.state)
+        message = self.graph.entry_input_error(context.input)
         return GateCheck(
             name="InputSchema",
             stage="plan",
             passed=message is None,
             message=message or "",
         )
-
-    def _step_input_check(
-        self, node_ids: list[str], state: dict[str, Any]
-    ) -> GateCheck:
-        """Built-in per-node input gate, evaluated before a step executes.
-
-        Each planned actionable node may declare ``input_schema``; the pre-step
-        workflow state must satisfy every such contract. Fallback nodes are
-        exempt (safe stop).
-        """
-        for node_id in node_ids:
-            definition = self.graph.nodes.get(node_id)
-            if definition is None or definition.is_fallback:
-                continue
-            message = definition.input_error(state)  # input_schema is required
-            if message is not None:
-                return GateCheck(
-                    name="NodeInputSchema",
-                    stage="result",
-                    passed=False,
-                    node_id=node_id,
-                    message=message,
-                )
-        return GateCheck(name="NodeInputSchema", stage="result", passed=True)
 
     def _step_guard_check(
         self,
@@ -979,8 +1095,17 @@ class ControlManager:
             if candidate.is_fallback:
                 continue
             target = candidate.node_id
+            # Already standing on the planned node (entry / resume) — no hop.
+            if target in frontier:
+                continue
             allowed = any(
-                self.graph.allows(source, target)
+                (
+                    self.graph.allows(source, target)
+                    or any(
+                        self.graph.allows(source, r) and self.graph.allows(r, target)
+                        for r in self.graph.router_ids
+                    )
+                )
                 and self.graph.guard_allows(source, target, state)
                 for source in frontier
             )
@@ -1043,6 +1168,83 @@ class ControlManager:
         if target_id == END or self.graph.is_router_state(target_id):
             return target_id
         return None
+
+    def _chain_deterministic_node_step(
+        self,
+        current_state: str,
+        state: Mapping[str, Any],
+        candidates: list[Candidate],
+        already_ran: set[str],
+    ) -> tuple[list[Candidate], list[int]] | None:
+        """Append the unique deterministic successor node as the next step."""
+        matching = self.graph.matching_deterministic(current_state, dict(state))
+        if len(matching) != 1:
+            return None
+        target = matching[0].target
+        if target == END or self.graph.is_router_state(target):
+            return None
+        definition = self.graph.nodes.get(target)
+        if definition is None or definition.is_fallback:
+            return None
+        if target in already_ran:
+            return None
+        if not self.graph.guard_allows(current_state, target, dict(state)):
+            return None
+        idx = next(
+            (i for i, item in enumerate(candidates) if item.node_id == target),
+            None,
+        )
+        if idx is None:
+            candidates.append(
+                Candidate(
+                    node_id=definition.id,
+                    name=definition.name,
+                    description=definition.description,
+                    prerequisites=definition.prerequisites,
+                    is_fallback=definition.is_fallback,
+                )
+            )
+            idx = len(candidates) - 1
+        return candidates, [idx]
+
+    def _current_node_plan(
+        self, context: RunContext
+    ) -> tuple[list[Candidate], RoutingPlan] | None:
+        """Execute the current node when it is actionable and not yet succeeded."""
+        definition = self.graph.nodes.get(context.current_state)
+        if definition is None or definition.is_fallback:
+            return None
+        already_ran = {
+            item.node_id
+            for item in context.prior_executions
+            if item.status == "succeeded"
+        }
+        if context.current_state in already_ran:
+            return None
+        target = Candidate(
+            node_id=definition.id,
+            name=definition.name,
+            description=definition.description,
+            prerequisites=definition.prerequisites,
+            is_fallback=definition.is_fallback,
+        )
+        fallback = self.graph.fallback_node
+        candidates = [
+            target,
+            Candidate(
+                node_id=fallback.id,
+                name=fallback.name,
+                description=fallback.description,
+                prerequisites=fallback.prerequisites,
+                is_fallback=True,
+            ),
+        ]
+        plan = RoutingPlan(
+            reasoning=f"Execute current node {definition.id!r}.",
+            topology=Topology.SEQUENTIAL,
+            execution_plan=[[0]],
+        )
+        return candidates, plan
 
     def _deterministic_plan(
         self, context: RunContext
@@ -1161,7 +1363,7 @@ class ControlManager:
         rejected = rejection is not None
         audit = AuditRecord(
             request_id=context.request_id,
-            intent=context.intent,
+            input=dict(context.input),
             initial_state=context.current_state,
             final_state=final_state,
             plan=plan,
@@ -1184,6 +1386,28 @@ class ControlManager:
             rejection=rejection,
             audit=audit,
         )
+
+
+def _attribution_hop_targets(
+    previous: str,
+    next_state: str | None,
+    results: list[NodeResult],
+) -> list[str]:
+    """Ordered state targets to record for this step.
+
+    Chained nodes often execute while ``previous`` is still the predecessor.
+    When the result jumps straight to ``End`` (or another outbound state),
+    land on the executed node first so transitions read
+    ``predecessor → N → next`` instead of collapsing to ``predecessor → next``.
+    """
+    if not next_state or next_state == previous:
+        return []
+    succeeded = [item for item in results if item.status == "succeeded"]
+    if len(succeeded) == 1:
+        executed = succeeded[0].node_id
+        if previous != executed and next_state != executed:
+            return [executed, next_state]
+    return [next_state]
 
 
 def _wire_node_result(result: NodeResult) -> dict[str, Any]:

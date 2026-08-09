@@ -144,18 +144,17 @@ class ProviderParameterExtractor:
         registry: ToolRegistry,
         *,
         instruction: str = EDGE_SFT_INSTRUCTION,
+        node: Any = None,
     ):
         self.provider = provider
         self.registry = registry
         self.instruction = instruction
+        self.node = node
 
     async def extract(
         self,
         messages: Sequence[dict[str, str]],
         tool: str,
-        *,
-        adapter_id: str | None = None,
-        adapter_version: str | None = None,
     ) -> ToolCall:
         spec = self.registry.get(tool)
         prompt = build_extraction_prompt(
@@ -164,12 +163,14 @@ class ProviderParameterExtractor:
             normalize_messages(messages),
             instruction=self.instruction,
         )
+        extra: dict[str, Any] = {}
+        if self.node is not None:
+            extra["node"] = self.node
         raw = await _generate(
             self.provider,
             prompt,
             tool_json_schema(spec.args_model),
-            adapter_id=adapter_id,
-            adapter_version=adapter_version,
+            **extra,
         )
         match = _JSON_OBJECT.search(raw)
         if match is None:
@@ -222,7 +223,7 @@ class ToolCallingLoop:
         context: Any = None,
     ) -> ToolLoopResult:
         extractor = self.extractor or ProviderParameterExtractor(
-            provider, tools.registry
+            provider, tools.registry, node=node
         )
         history = [dict(message) for message in messages]
         visible_parts: list[str] = []
@@ -230,17 +231,15 @@ class ToolCallingLoop:
         seen: set[str] = set()
         executed = 0
         turns = 0
-        adapter_kwargs = {
-            "adapter_id": getattr(node, "adapter_id", None) if node is not None else None,
-            "adapter_version": (
-                getattr(node, "adapter_version", None) if node is not None else None
-            ),
-        }
+        # Keep node on every backend generate so Vertex (and other non-local)
+        # provider ids survive beyond the first assembled-prompt turn.
+        provider_kwargs: dict[str, Any] = {"node": node} if node is not None else {}
 
         while turns < self.max_tool_calls * 2 + 2:
             turns += 1
             # First turn may carry node declarations so the backend can build
-            # the model prompt; later turns continue from conversation history.
+            # the model prompt; later turns continue from conversation history
+            # but still forward ``node`` for provider routing.
             if turns == 1 and node is not None and context is not None:
                 raw = await _generate(
                     provider,
@@ -248,11 +247,10 @@ class ToolCallingLoop:
                     node=node,
                     context=context,
                     tools=tools,
-                    **adapter_kwargs,
                 )
             else:
                 raw = await _generate(
-                    provider, _reasoning_prompt(history), **adapter_kwargs
+                    provider, _reasoning_prompt(history), **provider_kwargs
                 )
             visible, tool = parse_tool_trigger(raw)
             if visible:
@@ -288,7 +286,7 @@ class ToolCallingLoop:
             try:
                 if isinstance(extractor, ProviderParameterExtractor):
                     call = await extractor.extract(
-                        history, tool, **adapter_kwargs
+                        history, tool
                     )
                 else:
                     call = await extractor.extract(history, tool)
@@ -374,21 +372,47 @@ class ToolCallingLoop:
         else:
             history.append({"role": "tool", "content": "Turn limit reached."})
 
-        if output_schema is not None:
+        # Object schemas need a final constrained JSON pass. Plain-string
+        # schemas (ReasoningNode notes) must NOT — guided decoding on a bare
+        # ``{"type":"string"}`` overwrites the thinking trail with garbage
+        # (e.g. outlines emitting ``\BOOL "``).
+        if expects_json_object(output_schema):
             structured = await _generate(
                 provider,
                 _structured_output_prompt(history),
                 output_schema,
-                **adapter_kwargs,
+                **provider_kwargs,
             )
             visible_parts = [structured]
             history.append({"role": "assistant", "content": structured})
+        elif not visible_parts:
+            closing = await _generate(
+                provider,
+                _reasoning_prompt(history),
+                **provider_kwargs,
+            )
+            visible, _ = parse_tool_trigger(closing)
+            if visible:
+                visible_parts.append(visible)
+                history.append({"role": "assistant", "content": visible})
 
         return ToolLoopResult(
-            text=" ".join(visible_parts).strip(),
+            text="\n\n".join(part for part in visible_parts if part).strip(),
             messages=history,
             records=records,
         )
+
+
+def expects_json_object(schema: dict[str, Any] | None) -> bool:
+    """True when the output contract is structured JSON (not plain text)."""
+    if not schema:
+        return False
+    schema_type = schema.get("type")
+    if schema_type == "string":
+        return False
+    if schema_type == "object" or "properties" in schema:
+        return True
+    return schema_type is None
 
 
 def _reasoning_prompt(history: Sequence[dict[str, str]]) -> str:

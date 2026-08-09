@@ -43,7 +43,8 @@ class Client:
         project_id: str,
         base_url: str = DEFAULT_API_URL,
         timeout: float = 180.0,
-        telemetry_timeout: float = 2.0,
+        # Neon round-trips often exceed 2s; short budgets orphan runs with 0 events.
+        telemetry_timeout: float = 15.0,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -75,7 +76,7 @@ class BackendClient:
         api_key: str | None = None,
         project_id: str | None = None,
         timeout: float = 180.0,
-        telemetry_timeout: float = 2.0,
+        telemetry_timeout: float = 15.0,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must be an HTTP or HTTPS URL")
@@ -209,21 +210,22 @@ class BackendClient:
         node: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
-        adapter_id: str | None = None,
-        adapter_version: str | None = None,
     ) -> str:
-        """Generate text. Prefer ``node`` + ``context`` so the backend builds the prompt."""
+        """Generate text. Prefer ``node`` + ``context`` so the backend builds the prompt.
+
+        ``node`` may also accompany a prebuilt ``prompt`` (tool-loop continuations
+        and extractors) so the backend still sees the node's provider identity
+        (e.g. a Vertex model id).
+        """
         payload: dict[str, Any] = {"purpose": purpose, "schema": schema}
-        if adapter_id is not None:
-            payload["adapter_id"] = adapter_id
-        if adapter_version is not None:
-            payload["adapter_version"] = adapter_version
         if node is not None:
             payload["node"] = node
             if context is not None:
                 payload["context"] = context
             if tools is not None:
                 payload["tools"] = tools
+            if prompt:
+                payload["prompt"] = prompt
         elif prompt:
             payload["prompt"] = prompt
         else:
@@ -374,36 +376,34 @@ class BackendProvider:
         node: Any = None,
         context: Any = None,
         tools: Any = None,
-        adapter_id: str | None = None,
-        adapter_version: str | None = None,
     ) -> str:
-        resolved_adapter_id = adapter_id
-        resolved_adapter_version = adapter_version
-        if node is not None:
-            if resolved_adapter_id is None:
-                resolved_adapter_id = getattr(node, "adapter_id", None)
-            if resolved_adapter_version is None:
-                resolved_adapter_version = getattr(node, "adapter_version", None)
         kwargs: dict[str, Any] = {
             "schema": schema,
             "purpose": self.purpose,
-            "adapter_id": resolved_adapter_id,
-            "adapter_version": resolved_adapter_version,
         }
         if node is not None:
             kwargs["node"] = _wire_node_declaration(node)
             if context is not None:
                 kwargs["context"] = _wire_context(context)
-            if tools is not None:
-                kwargs["tools"] = _wire_tool_catalog(tools)
-            return await self.client.generate(None, **kwargs)
+                if tools is not None:
+                    kwargs["tools"] = _wire_tool_catalog(tools)
+                # First turn: backend assembles the prompt from declaration + context.
+                return await self.client.generate(None, **kwargs)
+            # Continuations / extractors: keep the prebuilt prompt; node carries
+            # provider identity (Vertex model ids, etc.).
+            return await self.client.generate(prompt, **kwargs)
         return await self.client.generate(prompt, **kwargs)
+
+
+# SDK-local provider registry name. Selects BackendProvider on the client;
+# the backend owns open-model routing via project reasoner defaults.
+_LOCAL_PROVIDER_ALIASES = frozenset({"neosyntropy/base", "neosyntropy-base"})
 
 
 def _wire_node_declaration(node: Any) -> dict[str, Any]:
     # input_schema is enforced client-side / on control-run graph nodes;
     # the /framework/inference NodePromptDeclaration wire does not carry it.
-    return {
+    payload = {
         "id": getattr(node, "id", ""),
         "name": getattr(node, "name", "") or "",
         "description": getattr(node, "description", "") or "",
@@ -412,6 +412,13 @@ def _wire_node_declaration(node: Any) -> dict[str, Any]:
         "tools": list(getattr(node, "tools", ()) or ()),
         "output_schema": getattr(node, "output_schema", None),
     }
+    # Only forward non-local provider ids (e.g. Vertex model names).
+    # neosyntropy/base must not be sent — older backends forbid the field,
+    # and newer ones treat anything other than neosyntropy/base as a Vertex model.
+    provider = getattr(node, "provider", "neosyntropy/base") or "neosyntropy/base"
+    if provider not in _LOCAL_PROVIDER_ALIASES:
+        payload["provider"] = provider
+    return payload
 
 
 def _wire_tool_catalog(tools: Any) -> list[dict[str, Any]]:

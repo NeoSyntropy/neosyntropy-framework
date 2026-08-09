@@ -51,9 +51,9 @@ class ExecutionRecord(RuntimeModel):
 class RunRequest(RuntimeModel):
     """One control-cycle request. Input is evidence, not authority."""
 
-    intent: str = Field(min_length=1)
+    input: dict[str, Any] = Field(default_factory=dict)
     request_id: str = Field(default_factory=lambda: str(uuid4()))
-    current_state: str = "Start"
+    current_state: str = ""
     history: list[Message] = Field(default_factory=list)
     prior_executions: list[ExecutionRecord] = Field(default_factory=list)
     state: dict[str, Any] = Field(default_factory=dict)
@@ -146,7 +146,7 @@ class AuditRecord(RuntimeModel):
     """Every control cycle emits one; reviews check a graph path, not a transcript."""
 
     request_id: str
-    intent: str
+    input: dict[str, Any] = Field(default_factory=dict)
     initial_state: str
     final_state: str
     plan: RoutingPlan | None = None
