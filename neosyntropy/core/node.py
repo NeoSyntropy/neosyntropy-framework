@@ -181,10 +181,15 @@ class Node(BaseModel):
             raise ValueError(f"node {self.id!r} requires output_schema")
         return self
 
-    def input_error(self, state: Mapping[str, Any]) -> str | None:
-        """Return why ``state`` fails this node's input contract, or None."""
+    def input_error(self, payload: Mapping[str, Any]) -> str | None:
+        """Return why ``payload`` fails this node's declared input_schema, or None.
+
+        Used for documenting / introspecting the node contract. Runtime
+        enforcement is the FSM entry gate on immutable run ``input`` only —
+        workflow ``state`` is not schema-checked (any node may update it).
+        """
         try:
-            jsonschema.validate(instance=dict(state), schema=self.input_schema)
+            jsonschema.validate(instance=dict(payload), schema=self.input_schema)
         except jsonschema.exceptions.ValidationError as exc:
             return (
                 f"node {self.id!r} input does not match input_schema: {exc.message}"

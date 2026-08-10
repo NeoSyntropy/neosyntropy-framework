@@ -394,7 +394,7 @@ class ControlManager:
             "metadata": dict(context.metadata),
         }
         view = await self._backend.start_control_run(
-            control_graph_manifest(self.graph),
+            control_graph_manifest(self.graph, self.tools),
             request_payload,
         )
         await self._observe(

@@ -119,11 +119,15 @@ def graph_manifest(
     }
 
 
-def control_graph_manifest(graph: FSM) -> dict[str, Any]:
-    """Minimum graph definition for backend-owned control runs.
+def control_graph_manifest(
+    graph: FSM,
+    tools: ToolRegistry | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Graph definition for backend-owned control runs (+ console display).
 
-    Includes structure the backend needs to validate and commit transitions.
-    Handlers, prompts, tools, guards, and providers are excluded.
+    Includes structure the backend needs to validate and commit transitions,
+    plus node declaration fields the console needs to render prompts, modes,
+    and tool allow-lists. Handlers, guards, and providers stay excluded.
     """
     groups: list[dict[str, Any]] = []
     for group in graph.groups.values():
@@ -141,6 +145,10 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
                 "id": item.id,
                 "name": item.name,
                 "description": item.description,
+                "prompt": item.prompt,
+                "mode": item.mode,
+                "kind": item.kind,
+                "tools": list(item.tools),
                 "prerequisites": list(item.prerequisites),
                 "is_fallback": item.is_fallback,
                 "group": item.group,
@@ -160,6 +168,7 @@ def control_graph_manifest(graph: FSM) -> dict[str, Any]:
         ],
         "groups": groups,
         "routers": sorted(graph.router_ids),
+        "tools": tool_catalog(tools),
         "allow_unlisted_transitions": graph.allow_unlisted_transitions,
     }
 
