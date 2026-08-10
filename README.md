@@ -1,7 +1,24 @@
-# NeoSyntropy Framework
+<p align="center">
+  <img src="docs/assets/neosyntropy-mark.png" alt="NeoSyntropy" width="96" />
+</p>
 
-A deterministic control layer for AI workflows. Models propose what should
-happen next; a finite-state graph defines what is allowed to happen.
+<h1 align="center">NeoSyntropy Framework</h1>
+
+<p align="center">
+  <strong>Stop paying for LLM hallucinations. Start paying for deterministic transitions.</strong>
+</p>
+
+Agent frameworks leave three problems unsolved:
+
+1. **Hallucinations** — the model invents steps, invents facts, and invents transitions you never approved.
+2. **Unit cost** — you pay for tokens, retries, and “thinking,” not for a successful business outcome.
+3. **Uncontrolled token spend** — every step re-reads history, self-correction loops bill you again, and finance only learns the number when the invoice arrives.
+
+NeoSyntropy is a **deterministic control layer** for AI workflows. Models propose what should happen next; a finite-state graph defines what is allowed to happen. Every action follows a path you defined: **0% deviation** from your business logic, enforced at the engine level — not begged for in a prompt.
+
+Replace opaque token bills with one measurable unit: the **successful state transition** (rates as low as **$0.002**). Failed or hallucinated steps are not billable events.
+
+---
 
 Core primitives — start with the model-backed nodes. That is the point of the
 framework: you drop tiny, scoped AI models into ordinary code paths
