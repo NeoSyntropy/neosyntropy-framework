@@ -6,7 +6,7 @@ from .dataset import (
     NodeTestCase,
     RouterTestCase,
 )
-from .critic import Critic, ExactMatchCritic, LLMCritic
+from .critic import Critic, ExactMatchCritic, BackendCritic
 from .metrics import NodeAccuracyTracker, RouterAccuracyTracker, FullPathAccuracyTracker
 from .runner import BenchmarkRunner
 
@@ -17,7 +17,7 @@ __all__ = [
     "RouterTestCase",
     "Critic",
     "ExactMatchCritic",
-    "LLMCritic",
+    "BackendCritic",
     "NodeAccuracyTracker",
     "RouterAccuracyTracker",
     "FullPathAccuracyTracker",
