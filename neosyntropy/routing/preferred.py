@@ -31,7 +31,7 @@ class PreferredPathRouter:
             if edge.target in index_by_node
             and not candidates[index_by_node[edge.target]].is_fallback
         ]
-        if len(matching) == 1:
+        if matching:
             best = matching[0]
             return RoutingPlan(
                 reasoning=(

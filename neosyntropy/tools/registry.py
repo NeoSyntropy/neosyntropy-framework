@@ -1,7 +1,7 @@
 """Pydantic-style tool registration and invocation logging.
 
-Preserves the ``slm-ntk`` ``@neosyntropy`` contract exactly (single pydantic
-args model, JSON schema, ``ToolInvocation`` audit log) so trained edge
+Preserves the ``neosyntropy-inference`` ``@neosyntropy`` contract exactly (single pydantic
+args model, JSON schema, ``ToolInvocation`` audit log) so native edge
 extractors plug in without changes. ``@tool`` is the framework name;
 ``neosyntropy`` is kept as a drop-in alias.
 
@@ -295,7 +295,7 @@ def tool(
     return decorator
 
 
-# Drop-in alias matching the slm-ntk decorator name.
+# Drop-in alias matching the neosyntropy-inference decorator name.
 neosyntropy = tool
 
 

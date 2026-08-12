@@ -1,16 +1,10 @@
 """Model-driven tool calling for provider-backed nodes.
 
-Reasoning and argument extraction are split, preserving the trained edge
-contracts:
-
-1. **Trigger** — the reasoner emits ``<TOOL:tool_name>`` with no arguments.
-2. **Extract** — a parameter extractor fills a JSON object constrained by the
-   tool's pydantic schema.
-3. **Validate** — arguments are validated against the args model *before* the
-   tool runs.
-4. **Execute** — the call goes through the node's bound tools, so the
+Uses native foundation model tool calls.
+1. **Request** — The provider receives the tool list (JSON Schema) and prompt.
+2. **Execute** — The call goes through the node's bound tools, so the
    allow-list is enforced fail-closed.
-5. **Reinject** — the outcome is appended as a ``tool`` message and reasoning
+3. **Reinject** — The outcome is appended as a ``tool`` message and reasoning
    continues.
 
 A model proposing an undeclared or unknown tool is a proposal, not
@@ -24,166 +18,46 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
-
-from ..core.models import ToolCall, ToolCallRecord
+from ..core.models import ToolCallRecord, GenerateResult
 from ..providers.base import Provider
-from .registry import BoundTools, ToolNotAllowedError, ToolRegistry
-
-# The trained handoff token. Changing this breaks trained reasoner weights.
-TOOL_TRIGGER = re.compile(r"<TOOL:([a-z][a-z0-9_]*)>")
-
-# Verbatim edge-extractor SFT instruction line, so trained extractors see the
-# prompt they were trained on.
-EDGE_SFT_INSTRUCTION = "You extract tool arguments for a customer-support classifier."
-
-
-class ExtractionError(RuntimeError):
-    """The extractor could not produce schema-valid arguments."""
-
-
-def parse_tool_trigger(text: str) -> tuple[str, str | None]:
-    """Split generated text into visible prose and an optional tool name."""
-    match = TOOL_TRIGGER.search(text)
-    if match is None:
-        return text.strip(), None
-    return text[: match.start()].strip(), match.group(1)
+from .registry import BoundTools, ToolNotAllowedError
 
 
 def normalize_messages(messages: Sequence[dict[str, str]]) -> str:
-    """``ROLE: content`` rendering used for extractor input (train/serve parity)."""
+    """``ROLE: content`` rendering used for legacy reasoner fallback."""
     return "\n".join(
         f"{message.get('role', 'unknown').upper()}: {message.get('content', '')}"
         for message in messages
     )
 
 
-def knowledge_text(tool: str, conversation: str) -> str:
-    """Soft-prefix knowledge string expected by GIST-style extractors."""
-    return f"tool={tool}\n{conversation}"
-
-
-def tool_json_schema(args_model: type[BaseModel]) -> dict[str, Any]:
-    """JSON Schema suitable for constrained decoding of tool arguments."""
-    schema = args_model.model_json_schema()
-    schema.setdefault("type", "object")
-    schema["additionalProperties"] = False
-    if "properties" in schema and "required" not in schema:
-        schema["required"] = list(schema["properties"])
-    return schema
-
-
-def build_extraction_prompt(
-    tool: str,
-    args_model: type[BaseModel],
-    conversation: str,
-    *,
-    instruction: str = EDGE_SFT_INSTRUCTION,
-) -> str:
-    """Verbatim edge extraction prompt shape (only the lead line is tunable)."""
-    fields = ", ".join(tool_json_schema(args_model).get("properties", {}))
-    return (
-        f"{instruction}\n"
-        f"Tool: {tool}\n"
-        f"Required JSON keys: {fields}\n"
-        f"Conversation:\n{conversation}\n"
-        "Respond with a single JSON object only.\n"
-        "JSON:"
-    )
-
-
-@runtime_checkable
-class ParameterExtractor(Protocol):
-    async def extract(
-        self, messages: Sequence[dict[str, str]], tool: str
-    ) -> ToolCall: ...
-
-
 async def _generate(
     provider: Provider,
     prompt: str,
     schema: dict | None = None,
+    tools: BoundTools | None = None,
     **extra: Any,
-) -> str:
+) -> GenerateResult:
     kwargs: dict[str, Any] = {"schema": schema}
     try:
         params = inspect.signature(provider.generate).parameters
     except (TypeError, ValueError):
         params = {}
+    if "tools" in params and tools is not None:
+        kwargs["tools"] = tools
     for key, value in extra.items():
         if key in params and value is not None:
             kwargs[key] = value
     output = provider.generate(prompt, **kwargs)
     if inspect.isawaitable(output):
         output = await output
-    return str(output)
-
-
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
-
-
-class ProviderParameterExtractor:
-    """Extracts tool arguments with any :class:`Provider`.
-
-    The tool's JSON schema is passed to ``generate`` so providers that support
-    constrained decoding emit a valid object by construction; the result is
-    validated against the pydantic args model either way. Confidence is 1.0
-    for schema-valid output — the gate that matters here is validation, not a
-    score. Swap in a trained extractor (which reports real confidence) via the
-    :class:`ParameterExtractor` protocol.
-    """
-
-    def __init__(
-        self,
-        provider: Provider,
-        registry: ToolRegistry,
-        *,
-        instruction: str = EDGE_SFT_INSTRUCTION,
-        node: Any = None,
-    ):
-        self.provider = provider
-        self.registry = registry
-        self.instruction = instruction
-        self.node = node
-
-    async def extract(
-        self,
-        messages: Sequence[dict[str, str]],
-        tool: str,
-    ) -> ToolCall:
-        spec = self.registry.get(tool)
-        prompt = build_extraction_prompt(
-            tool,
-            spec.args_model,
-            normalize_messages(messages),
-            instruction=self.instruction,
-        )
-        extra: dict[str, Any] = {}
-        if self.node is not None:
-            extra["node"] = self.node
-        raw = await _generate(
-            self.provider,
-            prompt,
-            tool_json_schema(spec.args_model),
-            **extra,
-        )
-        match = _JSON_OBJECT.search(raw)
-        if match is None:
-            raise ExtractionError(f"no JSON object in extractor output: {raw!r}")
-        try:
-            payload = json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise ExtractionError(f"invalid JSON from extractor: {raw!r}") from exc
-        try:
-            validated = spec.args_model.model_validate(payload)
-        except ValidationError as exc:
-            raise ExtractionError(f"arguments failed {tool} schema: {exc}") from exc
-        return ToolCall(tool=tool, arguments=validated.model_dump(), confidence=1.0)
+    if isinstance(output, GenerateResult):
+        return output
+    return GenerateResult(text=str(output), tool_calls=[])
 
 
 @dataclass
@@ -194,7 +68,7 @@ class ToolLoopResult:
 
 
 class ToolCallingLoop:
-    """Runs reason → trigger → extract → validate → execute → reinject.
+    """Runs reason → native trigger → validate → execute → reinject.
 
     Bounded by construction: at most ``max_tool_calls`` executed calls and a
     hard turn limit, with duplicate calls rejected, so a model cannot loop
@@ -204,12 +78,10 @@ class ToolCallingLoop:
     def __init__(
         self,
         *,
-        extractor: ParameterExtractor | None = None,
-        confidence_threshold: float = 0.55,
         max_tool_calls: int = 4,
+        extractor: Any = None,
+        confidence_threshold: float = 0.55,
     ):
-        self.extractor = extractor
-        self.confidence_threshold = confidence_threshold
         self.max_tool_calls = max_tool_calls
 
     async def run(
@@ -222,26 +94,18 @@ class ToolCallingLoop:
         node: Any = None,
         context: Any = None,
     ) -> ToolLoopResult:
-        extractor = self.extractor or ProviderParameterExtractor(
-            provider, tools.registry, node=node
-        )
         history = [dict(message) for message in messages]
         visible_parts: list[str] = []
         records: list[ToolCallRecord] = []
         seen: set[str] = set()
         executed = 0
         turns = 0
-        # Keep node on every backend generate so Vertex (and other non-local)
-        # provider ids survive beyond the first assembled-prompt turn.
         provider_kwargs: dict[str, Any] = {"node": node} if node is not None else {}
 
         while turns < self.max_tool_calls * 2 + 2:
             turns += 1
-            # First turn may carry node declarations so the backend can build
-            # the model prompt; later turns continue from conversation history
-            # but still forward ``node`` for provider routing.
             if turns == 1 and node is not None and context is not None:
-                raw = await _generate(
+                result = await _generate(
                     provider,
                     _reasoning_prompt(history),
                     node=node,
@@ -249,152 +113,121 @@ class ToolCallingLoop:
                     tools=tools,
                 )
             else:
-                raw = await _generate(
-                    provider, _reasoning_prompt(history), **provider_kwargs
+                result = await _generate(
+                    provider, _reasoning_prompt(history), tools=tools, **provider_kwargs
                 )
-            visible, tool = parse_tool_trigger(raw)
-            if visible:
-                visible_parts.append(visible)
-                history.append({"role": "assistant", "content": visible})
-            if tool is None:
+            
+            if result.text.strip():
+                visible_parts.append(result.text.strip())
+                history.append({"role": "assistant", "content": result.text.strip()})
+
+            if not result.tool_calls:
                 break
 
-            trigger = f"<TOOL:{tool}>"
-            if history and history[-1].get("role") == "assistant":
-                history[-1]["content"] = f"{history[-1]['content']} {trigger}".strip()
-            else:
-                history.append({"role": "assistant", "content": trigger})
+            for call in result.tool_calls:
+                if executed >= self.max_tool_calls:
+                    history.append({"role": "tool", "content": "Tool-call limit reached."})
+                    break
 
-            # Allow-list gate: a proposal is not permission.
-            if tool not in tools:
-                records.append(ToolCallRecord(tool=tool, denied=True, error="not allowed"))
-                history.append(
-                    {
-                        "role": "tool",
-                        "content": (
-                            f"Tool '{tool}' is not available here. "
-                            f"Available tools: {list(tools.names()) or 'none'}."
-                        ),
-                    }
-                )
-                continue
-
-            if executed >= self.max_tool_calls:
-                history.append({"role": "tool", "content": "Tool-call limit reached."})
-                break
-
-            try:
-                if isinstance(extractor, ProviderParameterExtractor):
-                    call = await extractor.extract(
-                        history, tool
+                if call.tool not in tools:
+                    records.append(ToolCallRecord(tool=call.tool, denied=True, error="not allowed"))
+                    history.append(
+                        {
+                            "role": "tool",
+                            "content": (
+                                f"Tool '{call.tool}' is not available here. "
+                                f"Available tools: {list(tools.names()) or 'none'}."
+                            ),
+                        }
                     )
-                else:
-                    call = await extractor.extract(history, tool)
-            except (ExtractionError, KeyError) as exc:
-                records.append(ToolCallRecord(tool=tool, ok=False, error=str(exc)))
-                history.append(
-                    {"role": "tool", "content": f"Argument extraction failed: {exc}"}
-                )
-                continue
+                    continue
 
-            fingerprint = hashlib.sha256(
-                json.dumps(
-                    {"tool": call.tool, "arguments": call.arguments}, sort_keys=True
-                ).encode()
-            ).hexdigest()
-            if fingerprint in seen:
-                history.append(
-                    {"role": "tool", "content": "Duplicate tool call rejected."}
-                )
-                continue
-            seen.add(fingerprint)
+                fingerprint = hashlib.sha256(
+                    json.dumps(
+                        {"tool": call.tool, "arguments": call.arguments}, sort_keys=True
+                    ).encode()
+                ).hexdigest()
+                
+                if fingerprint in seen:
+                    history.append(
+                        {"role": "tool", "content": "Duplicate tool call rejected."}
+                    )
+                    continue
+                seen.add(fingerprint)
 
-            if call.confidence < self.confidence_threshold:
+                try:
+                    invocation = tools.try_invoke(call.tool, call.arguments)
+                except ToolNotAllowedError:
+                    records.append(
+                        ToolCallRecord(
+                            tool=call.tool,
+                            arguments=call.arguments,
+                            denied=True,
+                            error="not allowed",
+                        )
+                    )
+                    history.append(
+                        {"role": "tool", "content": f"Tool '{call.tool}' is not available."}
+                    )
+                    continue
+                except Exception as exc:
+                    records.append(ToolCallRecord(tool=call.tool, ok=False, error=str(exc)))
+                    history.append(
+                        {"role": "tool", "content": f"Argument extraction failed: {exc}"}
+                    )
+                    continue
+
+                executed += 1
                 records.append(
                     ToolCallRecord(
                         tool=call.tool,
                         arguments=call.arguments,
                         confidence=call.confidence,
-                        ok=False,
-                        error=f"Low-confidence arguments ({call.confidence:.3f})",
+                        ok=invocation.ok,
+                        result=invocation.result,
+                        error=invocation.error,
+                        latency_ms=invocation.latency_ms,
                     )
                 )
                 history.append(
-                    {"role": "tool", "content": "Arguments were not confident enough."}
+                    {
+                        "role": "tool",
+                        "content": json.dumps(
+                            {
+                                "tool": invocation.tool,
+                                "ok": invocation.ok,
+                                "result": invocation.result,
+                                "error": invocation.error,
+                            },
+                            separators=(",", ":"),
+                            default=str,
+                        ),
+                    }
                 )
-                continue
-
-            try:
-                invocation = tools.try_invoke(call.tool, call.arguments)
-            except ToolNotAllowedError:
-                # The allow-list is authoritative even if a custom extractor
-                # rewrote the tool name.
-                records.append(
-                    ToolCallRecord(
-                        tool=call.tool,
-                        arguments=call.arguments,
-                        denied=True,
-                        error="not allowed",
-                    )
-                )
-                history.append(
-                    {"role": "tool", "content": f"Tool '{call.tool}' is not available."}
-                )
-                continue
-
-            executed += 1
-            records.append(
-                ToolCallRecord(
-                    tool=call.tool,
-                    arguments=call.arguments,
-                    confidence=call.confidence,
-                    ok=invocation.ok,
-                    result=invocation.result,
-                    error=invocation.error,
-                    latency_ms=invocation.latency_ms,
-                )
-            )
-            history.append(
-                {
-                    "role": "tool",
-                    "content": json.dumps(
-                        {
-                            "tool": invocation.tool,
-                            "ok": invocation.ok,
-                            "result": invocation.result,
-                            "error": invocation.error,
-                        },
-                        separators=(",", ":"),
-                        default=str,
-                    ),
-                }
-            )
+                
+            if executed >= self.max_tool_calls:
+                break
         else:
             history.append({"role": "tool", "content": "Turn limit reached."})
 
-        # Object schemas need a final constrained JSON pass. Plain-string
-        # schemas (ReasoningNode notes) must NOT — guided decoding on a bare
-        # ``{"type":"string"}`` overwrites the thinking trail with garbage
-        # (e.g. outlines emitting ``\BOOL "``).
         if expects_json_object(output_schema):
             structured = await _generate(
                 provider,
                 _structured_output_prompt(history),
-                output_schema,
+                schema=output_schema,
                 **provider_kwargs,
             )
-            visible_parts = [structured]
-            history.append({"role": "assistant", "content": structured})
+            visible_parts = [structured.text]
+            history.append({"role": "assistant", "content": structured.text})
         elif not visible_parts:
             closing = await _generate(
                 provider,
                 _reasoning_prompt(history),
                 **provider_kwargs,
             )
-            visible, _ = parse_tool_trigger(closing)
-            if visible:
-                visible_parts.append(visible)
-                history.append({"role": "assistant", "content": visible})
+            if closing.text.strip():
+                visible_parts.append(closing.text.strip())
+                history.append({"role": "assistant", "content": closing.text.strip()})
 
         return ToolLoopResult(
             text="\n\n".join(part for part in visible_parts if part).strip(),

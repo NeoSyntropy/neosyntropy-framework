@@ -115,6 +115,13 @@ class ToolCallRecord(RuntimeModel):
     latency_ms: float = Field(default=0.0, ge=0.0)
 
 
+class GenerateResult(RuntimeModel):
+    """The outcome of a single LLM generation that may include tool calls."""
+
+    text: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+
+
 class NodeResult(RuntimeModel):
     """What a node proposes. State changes commit only after gates pass."""
 

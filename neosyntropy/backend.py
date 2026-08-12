@@ -210,7 +210,7 @@ class BackendClient:
         node: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
-    ) -> str:
+    ) -> Any:
         """Generate text. Prefer ``node`` + ``context`` so the backend builds the prompt.
 
         ``node`` may also accompany a prebuilt ``prompt`` (tool-loop continuations
@@ -234,6 +234,18 @@ class BackendClient:
         text = response.get("text")
         if not isinstance(text, str):
             raise BackendError("backend inference response has no text")
+            
+        tool_calls_data = response.get("tool_calls")
+        if tool_calls_data:
+            from .core.models import GenerateResult, ToolCall
+            calls = []
+            for c in tool_calls_data:
+                try:
+                    calls.append(ToolCall.model_validate(c))
+                except ValueError:
+                    pass
+            return GenerateResult(text=text, tool_calls=calls)
+            
         return text
 
     async def start_control_run(
@@ -289,6 +301,93 @@ class BackendClient:
             return RoutingPlan.model_validate(response)
         except ValueError as exc:
             raise BackendError(f"backend returned an invalid routing plan: {exc}") from exc
+
+    async def get(self, path: str) -> dict[str, Any] | list[Any]:
+        return await asyncio.to_thread(self._get, path)
+
+    async def pull_eval_samples(
+        self, project_id: str, node_id: str
+    ) -> list[dict[str, Any]]:
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples"
+        response = await self.get(path)
+        if isinstance(response, list):
+            return response
+        if isinstance(response, dict) and "items" in response:
+            return response["items"]
+        if isinstance(response, dict) and "samples" in response:
+            return response["samples"]
+        return [response] if response else []
+
+    async def push_critic_results(
+        self, project_id: str, node_id: str, results: dict
+    ) -> None:
+        """Send critic/judge results to the backend."""
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples/judge"
+        await self.post(path, {"results": results})
+
+    async def start_tune_job(self, project_id: str, node_id: str) -> str:
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/tune"
+        res = await self.post(path, {})
+        return res.get("id", "")
+
+    def _get(
+        self,
+        path: str,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any] | list[Any]:
+        token = self.api_key or self.access_token
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        if self.project_id:
+            headers["X-NeoSyntropy-Project-ID"] = self.project_id
+        request = Request(
+            f"{self.base_url}/{path.lstrip('/')}",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout if timeout is None else timeout) as response:
+                decoded = json.loads(response.read().decode())
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            code: str | None = None
+            try:
+                payload = json.loads(detail)
+                nested = payload.get("detail", detail)
+                if isinstance(nested, dict):
+                    code = nested.get("code")
+                    detail = nested.get("message", nested)
+                else:
+                    detail = nested
+            except json.JSONDecodeError:
+                pass
+            detail_text = str(detail)
+            warming = (
+                exc.code == 503
+                or code == INFERENCE_WARMING_CODE
+                or INFERENCE_WARMING_CODE in detail_text.lower()
+                or "still loading the gpu model" in detail_text.lower()
+                or "vllm adapter load failed" in detail_text.lower()
+            )
+            if warming:
+                raise BackendError(
+                    INFERENCE_WARMING_MESSAGE,
+                    code=INFERENCE_WARMING_CODE,
+                ) from exc
+            raise BackendError(
+                f"backend returned HTTP {exc.code}: {detail_text}",
+                code=code if isinstance(code, str) else None,
+            ) from exc
+        except URLError as exc:
+            raise BackendError(f"cannot reach NeoSyntropy backend: {exc.reason}") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BackendError("backend returned invalid JSON") from exc
+        if not isinstance(decoded, (dict, list)):
+            raise BackendError("backend response must be a JSON object or list")
+        return decoded
 
     def _post(
         self,
@@ -376,7 +475,7 @@ class BackendProvider:
         node: Any = None,
         context: Any = None,
         tools: Any = None,
-    ) -> str:
+    ) -> Any:
         kwargs: dict[str, Any] = {
             "schema": schema,
             "purpose": self.purpose,
@@ -503,6 +602,10 @@ def _wire_node_declaration(node: Any) -> dict[str, Any]:
 def _wire_tool_catalog(tools: Any) -> list[dict[str, Any]]:
     specs = tools.specs() if hasattr(tools, "specs") else ()
     return [
-        {"name": spec.name, "description": spec.description or ""}
+        {
+            "name": spec.name,
+            "description": spec.description or "",
+            "parameters": spec.json_schema,
+        }
         for spec in specs
     ]

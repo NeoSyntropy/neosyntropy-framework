@@ -14,7 +14,7 @@ from neosyntropy import (
 client = Client(
     api_key="nsk_ed3e7cad3792_b-4ZWhR5dZRnFv3GVPEc8Vddnwercpqfuqfk-uTqyZk",
     project_id="f63ebb40-c287-493e-972a-ac66546f92db",
-    base_url="http://127.0.0.1:8001",
+    base_url="https://api.neosyntropy.com",
     telemetry_timeout=20.0,
 )
 

@@ -13,7 +13,16 @@ class CallableProvider:
         self._fn = fn
         self._accepts_schema = "schema" in inspect.signature(fn).parameters
 
-    def generate(self, prompt: str, *, schema: dict[str, Any] | None = None) -> Any:
-        if self._accepts_schema:
-            return self._fn(prompt, schema=schema)
-        return self._fn(prompt)
+    def generate(
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        tools: Any = None,
+    ) -> Any:
+        kwargs: dict[str, Any] = {}
+        if self._accepts_schema and schema is not None:
+            kwargs["schema"] = schema
+        if "tools" in inspect.signature(self._fn).parameters and tools is not None:
+            kwargs["tools"] = tools
+        return self._fn(prompt, **kwargs)

@@ -481,12 +481,25 @@ class FSM:
     def matching_deterministic(
         self, source: str, state: dict[str, Any]
     ) -> list[Edge]:
-        """Deterministic edges whose guards allow ``state`` (fail-closed)."""
+        """Deterministic edges whose guards allow ``state`` (fail-closed).
+
+        Order matches compile / authoring order (DeterministicRouter: first
+        matching rule wins — use :meth:`first_matching_deterministic`).
+        """
         return [
             edge
             for edge in self.outgoing(source, kind="deterministic")
             if edge.guard_allows(state)
         ]
+
+    def first_matching_deterministic(
+        self, source: str, state: dict[str, Any]
+    ) -> Edge | None:
+        """First guard-allowed deterministic edge (DeterministicRouter semantics)."""
+        for edge in self.outgoing(source, kind="deterministic"):
+            if edge.guard_allows(state):
+                return edge
+        return None
 
     def semantic_candidate_ids(self, source: str) -> set[str] | None:
         """Node ids in scope for the semantic router from ``source``.
@@ -650,11 +663,11 @@ class FSM:
         return payload
 
     def _follow_terminal_edge(self, current: str, state: Mapping[str, Any]) -> str:
-        """If the only deterministic exit is End, advance without another node run."""
+        """If the first matching deterministic exit is End, advance without another node run."""
         if current == END:
             return current
-        matching = self.matching_deterministic(current, dict(state))
-        if len(matching) == 1 and matching[0].target == END:
+        matching = self.first_matching_deterministic(current, dict(state))
+        if matching is not None and matching.target == END:
             return END
         return current
 

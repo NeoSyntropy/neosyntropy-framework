@@ -8,9 +8,16 @@ from typing import Any, Protocol, runtime_checkable
 @runtime_checkable
 class Provider(Protocol):
     def generate(
-        self, prompt: str, *, schema: dict[str, Any] | None = None
-    ) -> str | Awaitable[str]:
-        """Generate a completion; may be sync or async."""
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        tools: Any = None,
+    ) -> str | Any | Awaitable[str | Any]:
+        """Generate a completion; may be sync or async.
+        
+        Returns a string, or a GenerateResult if tool calls are produced.
+        """
         ...
 
 

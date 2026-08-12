@@ -25,7 +25,7 @@ from ..core.node import (
     NodeContext,
 )
 from ..providers.base import ProviderRegistry
-from ..tools.calling import ParameterExtractor, ToolCallingLoop, expects_json_object
+from ..tools.calling import ToolCallingLoop, expects_json_object
 from ..tools.registry import BoundTools, ToolNotAllowedError, ToolRegistry
 
 
@@ -35,12 +35,11 @@ class TopologyExecutor:
         providers: ProviderRegistry,
         tools: ToolRegistry | None = None,
         *,
-        extractor: ParameterExtractor | None = None,
         tool_loop: ToolCallingLoop | None = None,
     ):
         self.providers = providers
         self.tools = tools or ToolRegistry()
-        self.tool_loop = tool_loop or ToolCallingLoop(extractor=extractor)
+        self.tool_loop = tool_loop or ToolCallingLoop()
 
     async def execute_step(
         self,
@@ -118,9 +117,18 @@ class TopologyExecutor:
                 )
                 if inspect.isawaitable(output):
                     output = await output
+                
+                from ..core.models import GenerateResult
+                if isinstance(output, GenerateResult):
+                    output_text = output.text
+                else:
+                    output_text = output
+
                 if output_schema is not None and expects_json_object(output_schema):
-                    output = _parse_structured(output)
-                raw = NodeResult(node_id=definition.id, output=output)
+                    output_value = _parse_structured(output_text)
+                else:
+                    output_value = output_text
+                raw = NodeResult(node_id=definition.id, output=output_value)
         except ToolNotAllowedError:
             raise
         except Exception as exc:

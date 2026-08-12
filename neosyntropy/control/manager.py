@@ -54,7 +54,7 @@ from ..providers.base import Provider, ProviderRegistry
 from ..routing.backend_route import BackendSemanticRouter
 from ..routing.base import Router
 from ..routing.preferred import PreferredPathRouter
-from ..tools.calling import ParameterExtractor
+
 from ..tools.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
 from .logging import DecisionLogger
@@ -97,7 +97,7 @@ class ControlManager:
         tools: ToolRegistry | None = None,
         validator: PlanValidator | None = None,
         executor: TopologyExecutor | None = None,
-        extractor: ParameterExtractor | None = None,
+        extractor: Any | None = None,
         context_builder: ContextBuilder | None = None,
         decision_logger: DecisionLogger | None = None,
         observer: RunObserver | None = None,
@@ -139,7 +139,7 @@ class ControlManager:
         )
         self.validator = validator or PlanValidator()
         self.executor = executor or TopologyExecutor(
-            self.providers, self.tools, extractor=extractor
+            self.providers, self.tools
         )
         self.context_builder = context_builder or ContextBuilder()
         self.decision_logger = decision_logger
@@ -282,10 +282,10 @@ class ControlManager:
                 and state not in already_ran
             ):
                 break
-            matching = self.graph.matching_deterministic(state, context.state)
-            if len(matching) != 1:
+            matching = self.graph.first_matching_deterministic(state, context.state)
+            if matching is None:
                 break
-            target = matching[0].target
+            target = matching.target
             if target == END or self.graph.is_router_state(target):
                 hops.append((state, target))
                 state = target
@@ -368,13 +368,14 @@ class ControlManager:
                 rejection=None,
                 committed=[f"{source}->{target}" for source, target in local_hops],
             )
-        # Multi-rule DeterministicRouter: evaluate guards locally, then short-
-        # circuit through the offline cycle (backend cannot see guards).
+        # Multi-rule DeterministicRouter: evaluate guards locally (first match
+        # wins), then short-circuit through the offline cycle (backend cannot
+        # see guards).
         if self.graph.is_router_state(context.current_state):
-            matching = self.graph.matching_deterministic(
+            matching = self.graph.first_matching_deterministic(
                 context.current_state, context.state
             )
-            if len(matching) == 1 and matching[0].target in self.graph.nodes:
+            if matching is not None and matching.target in self.graph.nodes:
                 return await self._run_control_cycle(
                     context, observation_run_id, initial_checks
                 )
@@ -826,9 +827,11 @@ class ControlManager:
             if len(step_targets) == 1:
                 only = next(iter(step_targets))
                 if merged_next in (None, only):
-                    matching = self.graph.matching_deterministic(only, preview_state)
-                    if len(matching) == 1:
-                        auto_target = matching[0].target
+                    matching = self.graph.first_matching_deterministic(
+                        only, preview_state
+                    )
+                    if matching is not None:
+                        auto_target = matching.target
                         if auto_target == END or self.graph.is_router_state(
                             auto_target
                         ):
@@ -1158,13 +1161,13 @@ class ControlManager:
     # -- helpers -------------------------------------------------------------
 
     def _deterministic_hop_target(self, context: RunContext) -> str | None:
-        """Target id when the only matching edge is a router state or End."""
-        matching = self.graph.matching_deterministic(
+        """Target id when the first matching edge is a router state or End."""
+        matching = self.graph.first_matching_deterministic(
             context.current_state, context.state
         )
-        if len(matching) != 1:
+        if matching is None:
             return None
-        target_id = matching[0].target
+        target_id = matching.target
         if target_id == END or self.graph.is_router_state(target_id):
             return target_id
         return None
@@ -1176,11 +1179,11 @@ class ControlManager:
         candidates: list[Candidate],
         already_ran: set[str],
     ) -> tuple[list[Candidate], list[int]] | None:
-        """Append the unique deterministic successor node as the next step."""
-        matching = self.graph.matching_deterministic(current_state, dict(state))
-        if len(matching) != 1:
+        """Append the first matching deterministic successor node as the next step."""
+        matching = self.graph.first_matching_deterministic(current_state, dict(state))
+        if matching is None:
             return None
-        target = matching[0].target
+        target = matching.target
         if target == END or self.graph.is_router_state(target):
             return None
         definition = self.graph.nodes.get(target)
@@ -1249,13 +1252,13 @@ class ControlManager:
     def _deterministic_plan(
         self, context: RunContext
     ) -> tuple[list[Candidate], RoutingPlan] | None:
-        """Return a plan when exactly one deterministic edge matches a node."""
-        matching = self.graph.matching_deterministic(
+        """Return a plan when the first matching deterministic edge targets a node."""
+        matching = self.graph.first_matching_deterministic(
             context.current_state, context.state
         )
-        if len(matching) != 1:
+        if matching is None:
             return None
-        target_id = matching[0].target
+        target_id = matching.target
         if target_id not in self.graph.nodes:
             return None
         definition = self.graph.nodes[target_id]
