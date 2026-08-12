@@ -1,3 +1,18 @@
+"""Local runnable demo: ReasoningNode investigates a refund with tools.
+
+Loads credentials from ``tests/.env`` (see ``tests/.env.example``).
+Do not hardcode ``api_key`` / project ids in source — CI secret scan will fail.
+
+Run::
+
+    python tests/test_reason_node.py
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
@@ -13,13 +28,42 @@ from neosyntropy import (
     tool,
 )
 
-# 1. Client setup with credentials
-client = Client(
-    api_key="nsk_ed3e7cad3792_b-4ZWhR5dZRnFv3GVPEc8Vddnwercpqfuqfk-uTqyZk",
-    project_id="f63ebb40-c287-493e-972a-ac66546f92db",
-    base_url="http://127.0.0.1:8001",
-    telemetry_timeout=20.0,
-)
+VERTEX_MODEL = "gemini-2.5-flash"
+TESTS_ENV_PATH = Path(__file__).resolve().parent / ".env"
+
+
+def _load_tests_env() -> None:
+    if not TESTS_ENV_PATH.is_file():
+        raise SystemExit(
+            f"Missing {TESTS_ENV_PATH}. Copy tests/.env.example to tests/.env and fill values."
+        )
+    for raw in TESTS_ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key:
+            os.environ[key] = value
+
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise SystemExit(f"Missing required value {name} in {TESTS_ENV_PATH}.")
+    return value
+
+
+def _client_from_env() -> Client:
+    return Client(
+        api_key=_require_env("NEOSYNTROPY_API_KEY"),
+        project_id=_require_env("NEOSYNTROPY_PROJECT_ID"),
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", "https://api.neosyntropy.com").strip()
+        or "https://api.neosyntropy.com",
+        telemetry_timeout=20.0,
+    )
+
 
 registry = ToolRegistry()
 
@@ -31,7 +75,6 @@ class RefundInvestigationInput(BaseModel):
     intent: str
 
 
-# --- Tool 1: Lookup Customer Account ---
 class LookupCustomerArgs(BaseModel):
     customer_id: str
 
@@ -47,7 +90,6 @@ def lookup_customer_account(args: LookupCustomerArgs) -> dict:
     }
 
 
-# --- Tool 2: Fetch Transaction History ---
 class FetchTransactionArgs(BaseModel):
     order_id: str
 
@@ -64,7 +106,6 @@ def fetch_transaction_history(args: FetchTransactionArgs) -> dict:
     }
 
 
-# --- Tool 3: Check Product Return Policy ---
 class ProductPolicyArgs(BaseModel):
     product_id: str
 
@@ -81,10 +122,6 @@ def check_product_return_policy(args: ProductPolicyArgs) -> dict:
     }
 
 
-# Vertex Gemini model id (anything other than neosyntropy/base routes to Vertex).
-VERTEX_MODEL = "gemini-2.5-flash"
-
-
 class RefundClaimSummary(BaseModel):
     """Structured JSON summary of the refund investigation."""
 
@@ -99,7 +136,6 @@ class RefundClaimSummary(BaseModel):
     refund_amount: float | None = None
 
 
-# --- ReasoningNode — The central node under test ---
 reason_node = ReasoningNode(
     id="ReasoningNode",
     input_schema=RefundInvestigationInput,
@@ -116,7 +152,6 @@ reason_node = ReasoningNode(
     ),
 )
 
-# SchemaNode — summarize investigation as constrained JSON
 summarize = SchemaNode(
     id="Summarize",
     input_schema=OpenInput,
@@ -138,7 +173,6 @@ out_of_scope = SchemaNode(
     prompt="Politely refuse out-of-scope requests.",
 )
 
-# --- FSM Workflow: Reason → Summarize (JSON) ---
 fsm = FSM(
     entry=reason_node,
     nodes=[reason_node, summarize, out_of_scope],
@@ -150,6 +184,8 @@ fsm = FSM(
 )
 
 if __name__ == "__main__":
+    _load_tests_env()
+    client = _client_from_env()
     result = fsm.run(
         RefundInvestigationInput(
             intent="Investigate refund request for order ord_98765 for customer cust_12345 (laptop defect)",
@@ -164,15 +200,18 @@ if __name__ == "__main__":
     )
     print("Execution Finished!")
     print(f"Final State: {result.final_state} (Rejected: {result.rejected})")
-    
+
     if result.rejection:
         print(f"REJECTED: {result.rejection}")
-        
+
     print(f"Audit Log: {result.audit}")
-    
+
     for step in result.steps:
         for item in step.results:
             print(f"\n=== Output ===\n{item.output}")
             for record in item.tool_calls:
                 verdict = "ok" if record.ok else ("denied" if record.denied else "failed")
-                print(f"  [{verdict}] Tool Call: {record.tool} {record.arguments} {record.error or ''}")
+                print(
+                    f"  [{verdict}] Tool Call: {record.tool} {record.arguments} "
+                    f"{record.error or ''}"
+                )

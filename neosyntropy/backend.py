@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -247,7 +247,7 @@ class BackendClient:
         return await self.post(
             "/control/runs",
             {
-                "graph": graph_manifest,
+                "graph": _control_api_graph(graph_manifest),
                 "request": request,
                 "category": category,
             },
@@ -398,6 +398,55 @@ class BackendProvider:
 # SDK-local provider registry name. Selects BackendProvider on the client;
 # the backend owns open-model routing via project reasoner defaults.
 _LOCAL_PROVIDER_ALIASES = frozenset({"neosyntropy/base", "neosyntropy-base"})
+
+# Opaque /control/runs ControlGraph forbids console-only node/graph fields.
+_CONTROL_API_NODE_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "description",
+        "prerequisites",
+        "is_fallback",
+        "group",
+        "tuned",
+        "input_schema",
+        "output_schema",
+        "axioms",
+    }
+)
+_CONTROL_API_GRAPH_FIELDS = frozenset(
+    {
+        "schema_version",
+        "entry",
+        "input_schema",
+        "nodes",
+        "edges",
+        "groups",
+        "routers",
+        "allow_unlisted_transitions",
+    }
+)
+
+
+def _control_api_graph(graph_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a rich manifest onto the backend ControlGraph wire contract."""
+    nodes: list[dict[str, Any]] = []
+    for node in graph_manifest.get("nodes") or []:
+        if not isinstance(node, Mapping):
+            continue
+        nodes.append({key: node[key] for key in _CONTROL_API_NODE_FIELDS if key in node})
+    payload = {
+        key: graph_manifest[key]
+        for key in _CONTROL_API_GRAPH_FIELDS
+        if key in graph_manifest and key != "nodes"
+    }
+    payload["nodes"] = nodes
+    payload.setdefault("schema_version", 1)
+    payload.setdefault("edges", [])
+    payload.setdefault("groups", [])
+    payload.setdefault("routers", [])
+    payload.setdefault("allow_unlisted_transitions", False)
+    return payload
 
 
 def _wire_node_declaration(node: Any) -> dict[str, Any]:

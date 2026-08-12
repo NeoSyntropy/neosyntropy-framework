@@ -55,7 +55,7 @@ control plane. New accounts include **100 free node passes** so you can run
 workflows before buying credits. Paid usage starts at **$0.005 per node**
 (minimum); the starter package is **$10 for 1,000 state transitions**. After
 sign-in, create a project and copy your API key + project id for the client
-below (or use `neosyntropy login`).
+below (or use the **neo-code** CLI: `neo-code login`).
 
 ## Install
 
@@ -72,21 +72,21 @@ pip install -e ".[dev]"   # with pytest + ruff + build tools
 
 ## CLI login and projects
 
-Installing the package also installs the `neosyntropy` command, while preserving
-the normal Python import API. Sign in at [neosyntropy.com](https://neosyntropy.com)
-first, then connect a terminal through that browser session and create or select
-a project:
+Auth and project management live in the **neo-code** CLI (separate package), not
+in this framework install. The Python import API (`from neosyntropy import …`)
+is unchanged. Sign in at [neosyntropy.com](https://neosyntropy.com) first, then:
 
 ```bash
-neosyntropy login
-neosyntropy project create "Support automation" --use
-neosyntropy project list
+# from the neo-code package / BMAD-METHOD-NEOSYNTROPY checkout
+neo-code login
+neo-code project create "Support automation" --use
+neo-code project list
 ```
 
 ```bash
-neosyntropy --api-url http://localhost:8000 --profile development login
-neosyntropy --profile development project use <project-id>
-neosyntropy logout
+neo-code --api-url http://localhost:8000 --profile development login
+neo-code --profile development project use <project-id>
+neo-code logout
 ```
 
 ## Quickstart
@@ -159,3 +159,12 @@ normal outcome — `result.rejected` is set and the audit explains why.
 
 More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) ·
 [`examples/refund_workflow.py`](examples/refund_workflow.py)
+
+## License
+
+NeoSyntropy Framework is licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
+
+You may use and modify it, including commercially, but if you distribute a
+modified version — or run a modified version as a network service — you must
+make the corresponding source available under the same license.

@@ -97,6 +97,8 @@ class DeterministicRouter:
     rules: Sequence[tuple[Callable[..., bool], RouteTarget]]
     description: str = ""
     input_schema: type[BaseModel] | dict[str, Any] | None = None
+    #: Owning group name when this router was authored inside a :class:`Group`.
+    group: str | None = None
     # Resolved JSON Schema + optional Pydantic model (set in __post_init__).
     json_schema: dict[str, Any] | None = field(init=False, default=None, repr=False)
     input_model: type[BaseModel] | None = field(init=False, default=None, repr=False)
@@ -155,6 +157,8 @@ class SemanticRouter:
     description: str = ""
     category: str = "general"
     input_schema: type[BaseModel] | dict[str, Any] | None = None
+    #: Owning group name when this router was authored inside a :class:`Group`.
+    group: str | None = None
     json_schema: dict[str, Any] | None = field(init=False, default=None, repr=False)
     input_model: type[BaseModel] | None = field(init=False, default=None, repr=False)
 

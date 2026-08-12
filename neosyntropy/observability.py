@@ -89,7 +89,7 @@ def graph_manifest(
                     "tools": [],
                     "input_schema": getattr(router, "json_schema", None),
                     "output_schema": None,
-                    "group": None,
+                    "group": getattr(router, "group", None),
                     "is_fallback": False,
                 }
                 for router in graph.routers.values()
@@ -105,13 +105,19 @@ def graph_manifest(
             for edge in graph.edges
         ],
         "groups": [
-            (
-                {"name": group.name, "entry": entry}
-                if (entry := (
-                    group.entry_id() if hasattr(group, "entry_id") else None
-                ))
-                else {"name": group.name}
-            )
+            {
+                "name": group.name,
+                **(
+                    {"entry": entry}
+                    if (
+                        entry := (
+                            group.entry_id() if hasattr(group, "entry_id") else None
+                        )
+                    )
+                    else {}
+                ),
+                **({"parent": group.parent} if getattr(group, "parent", None) else {}),
+            }
             for group in graph.groups.values()
         ],
         "routers": sorted(graph.router_ids),
@@ -135,27 +141,49 @@ def control_graph_manifest(
         entry = group.entry_id() if hasattr(group, "entry_id") else None
         if entry:
             payload["entry"] = entry
+        parent = getattr(group, "parent", None)
+        if parent:
+            payload["parent"] = parent
         groups.append(payload)
     return {
         "schema_version": 1,
         "entry": graph.entry_id,
         "input_schema": graph.input_schema,
         "nodes": [
-            {
-                "id": item.id,
-                "name": item.name,
-                "description": item.description,
-                "prompt": item.prompt,
-                "mode": item.mode,
-                "kind": item.kind,
-                "tools": list(item.tools),
-                "prerequisites": list(item.prerequisites),
-                "is_fallback": item.is_fallback,
-                "group": item.group,
-                "input_schema": item.input_schema,
-                "output_schema": item.output_schema,
-            }
-            for item in graph.nodes.values()
+            *[
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                    "prompt": item.prompt,
+                    "mode": item.mode,
+                    "kind": item.kind,
+                    "tools": list(item.tools),
+                    "prerequisites": list(item.prerequisites),
+                    "is_fallback": item.is_fallback,
+                    "group": item.group,
+                    "input_schema": item.input_schema,
+                    "output_schema": item.output_schema,
+                }
+                for item in graph.nodes.values()
+            ],
+            *[
+                {
+                    "id": router.id,
+                    "name": router.id,
+                    "description": getattr(router, "description", "") or "",
+                    "prompt": None,
+                    "mode": None,
+                    "kind": "router",
+                    "tools": [],
+                    "prerequisites": [],
+                    "is_fallback": False,
+                    "group": getattr(router, "group", None),
+                    "input_schema": getattr(router, "json_schema", None),
+                    "output_schema": None,
+                }
+                for router in graph.routers.values()
+            ],
         ],
         "edges": [
             {

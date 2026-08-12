@@ -24,7 +24,7 @@ import jsonschema
 from pydantic import BaseModel
 
 from .edge import Edge, TransitionTable, edge_deterministic, edge_fallback
-from .group import Group, expand_authored_groups
+from .group import Group, expand_authored_groups, flatten_group_tree
 from .node import CombineNode, Node
 
 END = "End"
@@ -191,8 +191,10 @@ class FSM:
         resolved_groups: list[Group] = []
         for group in groups:
             resolved = group if isinstance(group, Group) else Group(name=group)
-            self.groups[resolved.name] = resolved
-            resolved_groups.append(resolved)
+            for item in flatten_group_tree([resolved]):
+                if item.name not in self.groups:
+                    self.groups[item.name] = item
+                    resolved_groups.append(item)
 
         # Groups used as semantic route targets may also author nodes/routers.
         for root in [*routers, entry]:
@@ -204,9 +206,11 @@ class FSM:
                 if not isinstance(item, SemanticRouter):
                     continue
                 for target in item.routes.values():
-                    if isinstance(target, Group) and target.name not in self.groups:
-                        self.groups[target.name] = target
-                        resolved_groups.append(target)
+                    if isinstance(target, Group):
+                        for nested in flatten_group_tree([target]):
+                            if nested.name not in self.groups:
+                                self.groups[nested.name] = nested
+                                resolved_groups.append(nested)
 
         try:
             group_nodes, group_routers, group_edges = expand_authored_groups(

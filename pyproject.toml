@@ -8,13 +8,14 @@ version = "0.1.0"
 description = "Deterministic AI workflow framework: nodes, edges, axioms, groups, and a control manager over finite-state graphs."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "NeoSyntropy" }]
 keywords = ["ai", "agents", "workflow", "fsm", "deterministic", "control"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
@@ -27,7 +28,6 @@ classifiers = [
 dependencies = [
     "pydantic>=2.5",
     "jsonschema>=4.17",
-    "keyring>=24",
 ]
 
 [project.urls]
@@ -35,9 +35,6 @@ Homepage = "https://neosyntropy.com"
 Documentation = "https://neosyntropy.com/docs"
 Repository = "https://github.com/NeoSyntropy/neosyntropy-framework"
 Issues = "https://github.com/NeoSyntropy/neosyntropy-framework/issues"
-
-[project.scripts]
-neosyntropy = "neosyntropy.cli:main"
 
 [project.optional-dependencies]
 dev = [

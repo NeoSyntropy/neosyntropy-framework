@@ -203,6 +203,60 @@ from .tools.calling import (
 
 )
 
+from .tools.ast_tools import (
+
+    AnalyzeFileArgs,
+
+    AstAnalyzer,
+
+    AstTools,
+
+    AstToolsError,
+
+    FindBareExceptsArgs,
+
+)
+
+from .tools.coding_tools import (
+
+    CodingTools,
+
+    CodingToolsError,
+
+    CodingWorkspace,
+
+    DEFAULT_ALLOWED_COMMANDS,
+
+    EditFileArgs,
+
+    FindArgs,
+
+    GrepArgs,
+
+    LsArgs,
+
+    ReadFileArgs,
+
+    RunShellArgs,
+
+    WriteFileArgs,
+
+)
+
+from .tools.emailjs import (
+
+    EmailJSClient,
+
+    EmailJSCredentials,
+
+    EmailJSError,
+
+    EmailJSTools,
+
+    SendEmailArgs,
+
+)
+
 from .tools.registry import (
 
     DEFAULT_REGISTRY,
@@ -252,6 +306,48 @@ __all__ = [
     "DEFAULT_API_URL",
 
     "BoundTools",
+
+    "AnalyzeFileArgs",
+
+    "AstAnalyzer",
+
+    "AstTools",
+
+    "AstToolsError",
+
+    "FindBareExceptsArgs",
+
+    "CodingTools",
+
+    "CodingToolsError",
+
+    "CodingWorkspace",
+
+    "DEFAULT_ALLOWED_COMMANDS",
+
+    "EditFileArgs",
+
+    "FindArgs",
+
+    "GrepArgs",
+
+    "LsArgs",
+
+    "ReadFileArgs",
+
+    "RunShellArgs",
+
+    "WriteFileArgs",
+
+    "EmailJSClient",
+
+    "EmailJSCredentials",
+
+    "EmailJSError",
+
+    "EmailJSTools",
+
+    "SendEmailArgs",
 
     "CallableProvider",
 
