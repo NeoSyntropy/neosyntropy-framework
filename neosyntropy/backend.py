@@ -429,22 +429,42 @@ _CONTROL_API_GRAPH_FIELDS = frozenset(
 
 
 def _control_api_graph(graph_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """Project a rich manifest onto the backend ControlGraph wire contract."""
+    """Project a rich manifest onto the backend ControlGraph wire contract.
+
+    Console manifests embed router stubs in ``nodes`` (``kind: "router"``) for
+    display. The control API only accepts executable nodes there; routers belong
+    exclusively in the ``routers`` id list.
+    """
     nodes: list[dict[str, Any]] = []
+    router_ids: list[str] = []
+    seen_routers: set[str] = set()
+
+    for item in graph_manifest.get("routers") or []:
+        if isinstance(item, str) and item and item not in seen_routers:
+            router_ids.append(item)
+            seen_routers.add(item)
+
     for node in graph_manifest.get("nodes") or []:
         if not isinstance(node, Mapping):
             continue
+        if node.get("kind") == "router":
+            rid = node.get("id")
+            if isinstance(rid, str) and rid and rid not in seen_routers:
+                router_ids.append(rid)
+                seen_routers.add(rid)
+            continue
         nodes.append({key: node[key] for key in _CONTROL_API_NODE_FIELDS if key in node})
+
     payload = {
         key: graph_manifest[key]
         for key in _CONTROL_API_GRAPH_FIELDS
-        if key in graph_manifest and key != "nodes"
+        if key in graph_manifest and key not in {"nodes", "routers"}
     }
     payload["nodes"] = nodes
+    payload["routers"] = router_ids
     payload.setdefault("schema_version", 1)
     payload.setdefault("edges", [])
     payload.setdefault("groups", [])
-    payload.setdefault("routers", [])
     payload.setdefault("allow_unlisted_transitions", False)
     return payload
 
