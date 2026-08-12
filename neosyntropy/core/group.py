@@ -270,6 +270,8 @@ class Group(RuntimeModel):
                 category=router.category,
                 input_schema=router.input_model or router.input_schema,
                 group=self.name,
+                provider=getattr(router, "provider", "neosyntropy/base")
+                or "neosyntropy/base",
             )
         if isinstance(router, DeterministicRouter):
             return DeterministicRouter(

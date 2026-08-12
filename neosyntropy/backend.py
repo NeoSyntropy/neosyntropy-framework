@@ -423,6 +423,7 @@ _CONTROL_API_GRAPH_FIELDS = frozenset(
         "edges",
         "groups",
         "routers",
+        "router_providers",
         "allow_unlisted_transitions",
     }
 )
@@ -462,10 +463,19 @@ def _control_api_graph(graph_manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
     payload["nodes"] = nodes
     payload["routers"] = router_ids
+    if "router_providers" in graph_manifest and isinstance(
+        graph_manifest.get("router_providers"), Mapping
+    ):
+        payload["router_providers"] = {
+            str(key): str(value)
+            for key, value in graph_manifest["router_providers"].items()
+            if key and value
+        }
     payload.setdefault("schema_version", 1)
     payload.setdefault("edges", [])
     payload.setdefault("groups", [])
     payload.setdefault("allow_unlisted_transitions", False)
+    payload.setdefault("router_providers", {})
     return payload
 
 

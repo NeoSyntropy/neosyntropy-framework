@@ -159,6 +159,8 @@ class SemanticRouter:
     input_schema: type[BaseModel] | dict[str, Any] | None = None
     #: Owning group name when this router was authored inside a :class:`Group`.
     group: str | None = None
+    #: Backend inference provider id (``neosyntropy/base`` or a Vertex model).
+    provider: str = "neosyntropy/base"
     json_schema: dict[str, Any] | None = field(init=False, default=None, repr=False)
     input_model: type[BaseModel] | None = field(init=False, default=None, repr=False)
 

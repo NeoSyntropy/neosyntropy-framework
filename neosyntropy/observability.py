@@ -40,6 +40,16 @@ def tool_catalog(tools: ToolRegistry | Mapping[str, Any] | None = None) -> list[
     return catalog
 
 
+def _router_providers(graph: FSM) -> dict[str, str]:
+    """Map semantic router id → backend provider id for control inference."""
+    providers: dict[str, str] = {}
+    for router in graph.routers.values():
+        provider = getattr(router, "provider", None)
+        if isinstance(provider, str) and provider.strip():
+            providers[router.id] = provider.strip()
+    return providers
+
+
 def graph_manifest(
     graph: FSM,
     tools: ToolRegistry | Mapping[str, Any] | None = None,
@@ -121,6 +131,7 @@ def graph_manifest(
             for group in graph.groups.values()
         ],
         "routers": sorted(graph.router_ids),
+        "router_providers": _router_providers(graph),
         "tools": tool_catalog(tools),
     }
 
@@ -196,6 +207,7 @@ def control_graph_manifest(
         ],
         "groups": groups,
         "routers": sorted(graph.router_ids),
+        "router_providers": _router_providers(graph),
         "tools": tool_catalog(tools),
         "allow_unlisted_transitions": graph.allow_unlisted_transitions,
     }
