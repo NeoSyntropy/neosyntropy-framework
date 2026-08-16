@@ -44,7 +44,9 @@ Quickstart::
 
     fsm = Workflow([verify_identity], fallback=out_of_scope)
 
-    client = Client(api_key="...", project_id="...")
+    client = Client(api_key="...")
+    client.create_project(name="Support Bot", slug="support-bot")
+    # Or pass project_id=... explicitly if you already have one.
 
     result = fsm.run({"text": "refund order 123"}, client=client)
 

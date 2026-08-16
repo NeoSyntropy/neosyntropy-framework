@@ -104,11 +104,10 @@ from neosyntropy import (
     node,
 )
 
-# Connect with your project credentials (console → API keys / project id).
-client = Client(
-    api_key="your-api-key",
-    project_id="your-project-id",
-)
+# Connect with a workspace API key from Settings. Pass project_id=... if you
+# already have a project, or create/reuse one by slug:
+client = Client(api_key="your-api-key")
+client.create_project(name="Support Bot", slug="support-bot")
 
 
 class RefundTicket(BaseModel):

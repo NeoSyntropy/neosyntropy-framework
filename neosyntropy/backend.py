@@ -15,9 +15,16 @@ from .core.models import Candidate, RoutingPlan
 class BackendError(RuntimeError):
     """The NeoSyntropy backend rejected or could not serve a request."""
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        http_status: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.http_status = http_status
 
 
 INFERENCE_WARMING_CODE = "inference_warming"
@@ -30,9 +37,10 @@ DEFAULT_API_URL = "https://api.neosyntropy.com"
 
 
 class Client:
-    """Project-scoped NeoSyntropy client for application code.
+    """Authenticated NeoSyntropy client for application code.
 
-    Developers only supply an API key and project id. Pass this to
+    Supply a workspace API key from Settings. Pass an explicit ``project_id``
+    or call :meth:`create_project` (get-or-create by slug). Pass this to
     :meth:`FSM.run` — control / inference plumbing stays inside the framework.
     """
 
@@ -40,7 +48,7 @@ class Client:
         self,
         *,
         api_key: str,
-        project_id: str,
+        project_id: str | None = None,
         base_url: str = DEFAULT_API_URL,
         timeout: float = 180.0,
         # Neon round-trips often exceed 2s; short budgets orphan runs with 0 events.
@@ -48,20 +56,47 @@ class Client:
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
-        if not project_id:
-            raise ValueError("project_id is required")
+        if project_id is not None and not str(project_id).strip():
+            raise ValueError("project_id must be non-empty when provided")
         self.api_key = api_key
-        self.project_id = project_id
+        self.project_id = str(project_id).strip() if project_id is not None else None
         self.base_url = base_url
         self._backend = BackendClient(
             base_url,
             api_key=api_key,
-            project_id=project_id,
+            project_id=self.project_id,
             timeout=timeout,
             telemetry_timeout=telemetry_timeout,
         )
 
+    def list_projects(self) -> list[dict[str, Any]]:
+        """List projects owned by this API key's user."""
+        return self._backend.list_projects()
+
+    def create_project(
+        self,
+        name: str,
+        slug: str,
+        *,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Get or create a project by slug and bind this client to it."""
+        project = self._backend.ensure_project(
+            name=name, slug=slug, description=description
+        )
+        project_id = project.get("id")
+        if not project_id:
+            raise BackendError("backend returned an invalid project")
+        self.project_id = str(project_id)
+        self._backend.project_id = self.project_id
+        return project
+
     def _as_backend(self) -> BackendClient:
+        if not self.project_id:
+            raise ValueError(
+                "project_id is required. Pass project_id=... or call "
+                "create_project(name, slug)."
+            )
         return self._backend
 
 
@@ -82,8 +117,6 @@ class BackendClient:
             raise ValueError("base_url must be an HTTP or HTTPS URL")
         if not access_token and not api_key:
             raise ValueError("access_token or api_key is required")
-        if api_key and not project_id:
-            raise ValueError("project_id is required when api_key is used")
         if telemetry_timeout <= 0:
             raise ValueError("telemetry_timeout must be positive")
         base = base_url.rstrip("/")
@@ -102,20 +135,15 @@ class BackendClient:
         project_id = os.getenv("NEOSYNTROPY_PROJECT_ID")
         if not any((base_url, access_token, api_key, project_id)):
             return None
-        if not base_url or not (access_token or api_key):
+        if not (access_token or api_key):
             raise BackendError(
-                "NEOSYNTROPY_API_URL and either NEOSYNTROPY_ACCESS_TOKEN or "
-                "NEOSYNTROPY_API_KEY must be set together"
-            )
-        if api_key and not project_id:
-            raise BackendError(
-                "NEOSYNTROPY_PROJECT_ID must be set with NEOSYNTROPY_API_KEY"
+                "NEOSYNTROPY_ACCESS_TOKEN or NEOSYNTROPY_API_KEY must be set"
             )
         return cls(
-            base_url,
+            base_url or DEFAULT_API_URL,
             access_token,
             api_key=api_key,
-            project_id=project_id,
+            project_id=project_id or None,
         )
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -137,6 +165,8 @@ class BackendClient:
                 "graph": manifest,
             },
         }
+        if self.project_id:
+            payload["project_id"] = self.project_id
         if input is not None:
             payload["input"] = input
         response = await self._telemetry_post("/telemetry/runs", payload)
@@ -305,6 +335,42 @@ class BackendClient:
     async def get(self, path: str) -> dict[str, Any] | list[Any]:
         return await asyncio.to_thread(self._get, path)
 
+    def list_projects(self) -> list[dict[str, Any]]:
+        response = self._get("/observability/projects")
+        if not isinstance(response, list):
+            raise BackendError("backend response must be a JSON list")
+        return [item for item in response if isinstance(item, dict)]
+
+    def ensure_project(
+        self,
+        *,
+        name: str,
+        slug: str,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        if not name or not str(name).strip():
+            raise ValueError("name is required")
+        if not slug or not str(slug).strip():
+            raise ValueError("slug is required")
+        slug = str(slug).strip()
+        for project in self.list_projects():
+            if project.get("slug") == slug:
+                return project
+        payload: dict[str, Any] = {"name": str(name).strip(), "slug": slug}
+        if description is not None:
+            payload["description"] = description
+        try:
+            created = self._post("/observability/projects", payload)
+        except BackendError as exc:
+            if exc.http_status == 409:
+                for project in self.list_projects():
+                    if project.get("slug") == slug:
+                        return project
+            raise
+        if not isinstance(created, dict) or not created.get("id"):
+            raise BackendError("backend returned an invalid project")
+        return created
+
     async def pull_eval_samples(
         self, project_id: str, node_id: str
     ) -> list[dict[str, Any]]:
@@ -318,12 +384,59 @@ class BackendClient:
             return response["samples"]
         return [response] if response else []
 
+    async def critic_eval_samples(
+        self,
+        project_id: str,
+        node_id: str,
+        sample_ids: list[str] | None = None,
+        *,
+        model: str = "gemini-2.5-flash",
+        delete_bad: bool = True,
+        scenario: str | None = None,
+    ) -> dict[str, Any]:
+        """Label unlabeled eval samples via the backend critic."""
+        payload: dict[str, Any] = {"model": model, "delete_bad": delete_bad}
+        if sample_ids:
+            payload["sample_ids"] = sample_ids
+        if scenario:
+            payload["scenario"] = scenario
+        path = (
+            f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples/critic"
+        )
+        return await self.post(path, payload)
+
+    async def judge_output(
+        self,
+        project_id: str,
+        actual_output: Any,
+        ground_truth: Any,
+        *,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Score a new output against a stored gold label."""
+        payload: dict[str, Any] = {
+            "actual_output": actual_output,
+            "ground_truth": ground_truth,
+        }
+        if node_id:
+            payload["node_id"] = node_id
+        return await self.post(f"/eval/judge?project_id={project_id}", payload)
+
     async def push_critic_results(
-        self, project_id: str, node_id: str, results: dict
-    ) -> None:
-        """Send critic/judge results to the backend."""
-        path = f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples/judge"
-        await self.post(path, {"results": results})
+        self,
+        project_id: str,
+        node_id: str,
+        results: dict | None = None,
+    ) -> dict[str, Any]:
+        """Label samples for a node. Prefer :meth:`critic_eval_samples`."""
+        sample_ids: list[str] | None = None
+        if isinstance(results, dict):
+            raw_ids = results.get("sample_ids")
+            if isinstance(raw_ids, list):
+                sample_ids = [str(item) for item in raw_ids]
+        return await self.critic_eval_samples(
+            project_id, node_id, sample_ids=sample_ids
+        )
 
     async def start_tune_job(self, project_id: str, node_id: str) -> str:
         path = f"/observability/projects/{project_id}/nodes/{node_id}/tune"
@@ -376,10 +489,12 @@ class BackendClient:
                 raise BackendError(
                     INFERENCE_WARMING_MESSAGE,
                     code=INFERENCE_WARMING_CODE,
+                    http_status=exc.code,
                 ) from exc
             raise BackendError(
                 f"backend returned HTTP {exc.code}: {detail_text}",
                 code=code if isinstance(code, str) else None,
+                http_status=exc.code,
             ) from exc
         except URLError as exc:
             raise BackendError(f"cannot reach NeoSyntropy backend: {exc.reason}") from exc
@@ -438,10 +553,12 @@ class BackendClient:
                 raise BackendError(
                     INFERENCE_WARMING_MESSAGE,
                     code=INFERENCE_WARMING_CODE,
+                    http_status=exc.code,
                 ) from exc
             raise BackendError(
                 f"backend returned HTTP {exc.code}: {detail_text}",
                 code=code if isinstance(code, str) else None,
+                http_status=exc.code,
             ) from exc
         except URLError as exc:
             raise BackendError(f"cannot reach NeoSyntropy backend: {exc.reason}") from exc
@@ -463,9 +580,16 @@ def _wire_context(context: RunContext) -> dict[str, Any]:
 
 
 class BackendProvider:
-    def __init__(self, client: BackendClient, *, purpose: str = "node") -> None:
+    def __init__(
+        self,
+        client: BackendClient,
+        *,
+        purpose: str = "node",
+        inference_model: str | None = None,
+    ) -> None:
         self.client = client
         self.purpose = purpose
+        self.inference_model = inference_model
 
     async def generate(
         self,
@@ -476,6 +600,8 @@ class BackendProvider:
         context: Any = None,
         tools: Any = None,
     ) -> Any:
+        if node is not None and self.inference_model:
+            node = _PinnedProviderNode(node, self.inference_model)
         kwargs: dict[str, Any] = {
             "schema": schema,
             "purpose": self.purpose,
@@ -492,6 +618,17 @@ class BackendProvider:
             # provider identity (Vertex model ids, etc.).
             return await self.client.generate(prompt, **kwargs)
         return await self.client.generate(prompt, **kwargs)
+
+
+class _PinnedProviderNode:
+    """Proxy that overrides ``provider`` without mutating the FSM node."""
+
+    def __init__(self, node: Any, provider: str) -> None:
+        object.__setattr__(self, "_node", node)
+        object.__setattr__(self, "provider", provider)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_node"), name)
 
 
 # SDK-local provider registry name. Selects BackendProvider on the client;
