@@ -40,6 +40,7 @@ from ..core.models import (
     RoutingPlan,
     RunRequest,
     RunResult,
+    ToolCallRecord,
     Topology,
 )
 from ..core.state import StateConflictError, StateManager
@@ -486,6 +487,9 @@ class ControlManager:
                     str(view["run_id"]),
                     client_rejection=str(exc),
                 )
+                await self._observe_tools_executed(
+                    observation_run_id, step=step_number, results=results
+                )
                 await self._observe(
                     observation_run_id,
                     "step_completed",
@@ -509,6 +513,9 @@ class ControlManager:
                 view = await self._backend.submit_control_results(
                     str(view["run_id"]),
                     client_rejection=rejection,
+                )
+                await self._observe_tools_executed(
+                    observation_run_id, step=step_number, results=results
                 )
                 await self._observe(
                     observation_run_id,
@@ -558,6 +565,9 @@ class ControlManager:
                             },
                         )
             observed_transitions = len(transitions)
+            await self._observe_tools_executed(
+                observation_run_id, step=step_number, results=results
+            )
             await self._observe(
                 observation_run_id,
                 "step_completed",
@@ -812,6 +822,9 @@ class ControlManager:
                     )
                 )
                 completed, rejection = False, str(exc)
+                await self._observe_tools_executed(
+                    run_id, step=step_number, results=results
+                )
                 await self._observe(
                     run_id,
                     "step_completed",
@@ -864,6 +877,9 @@ class ControlManager:
             if step_failed:
                 completed = False
                 rejection = step_failed[0].message or f"gate '{step_failed[0].name}' failed"
+                await self._observe_tools_executed(
+                    run_id, step=step_number, results=results
+                )
                 await self._observe(
                     run_id,
                     "step_completed",
@@ -899,6 +915,9 @@ class ControlManager:
 
             if any(result.status == "failed" for result in results):
                 completed = False
+                await self._observe_tools_executed(
+                    run_id, step=step_number, results=results
+                )
                 await self._observe(
                     run_id,
                     "step_completed",
@@ -910,6 +929,9 @@ class ControlManager:
                     ),
                 )
                 break
+            await self._observe_tools_executed(
+                run_id, step=step_number, results=results
+            )
             await self._observe(
                 run_id,
                 "step_completed",
@@ -1035,6 +1057,34 @@ class ControlManager:
         except Exception:
             return
         await best_effort_call(operation, timeout=self.telemetry_timeout)
+
+    async def _observe_tools_executed(
+        self,
+        run_id: str | None,
+        *,
+        step: int,
+        results: list[NodeResult],
+    ) -> None:
+        """Emit ``tools_executed`` for tools ReasoningNode actually invoked."""
+        if self.observer is None or run_id is None:
+            return
+        for result in results:
+            tools = [
+                _executed_tool_payload(record)
+                for record in result.tool_calls
+                if not record.denied
+            ]
+            if not tools:
+                continue
+            await self._observe(
+                run_id,
+                "tools_executed",
+                {
+                    "step": step,
+                    "node_id": result.node_id,
+                    "tools": tools,
+                },
+            )
 
     async def _observation_finished(
         self,
@@ -1422,4 +1472,30 @@ def _wire_node_result(result: NodeResult) -> dict[str, Any]:
         "state_updates": result.state_updates,
         "next_state": result.next_state,
         "error": result.error,
+    }
+
+
+_MAX_TOOL_RESULT_CHARS = 4_096
+
+
+def _executed_tool_payload(record: ToolCallRecord) -> dict[str, Any]:
+    """Serialize one actually-invoked tool for ``tools_executed`` telemetry."""
+    result = record.result
+    if result is not None:
+        text = result if isinstance(result, str) else repr(result)
+        if len(text) > _MAX_TOOL_RESULT_CHARS:
+            result = {
+                "truncated": True,
+                "preview": text[:_MAX_TOOL_RESULT_CHARS],
+                "original_chars": len(text),
+            }
+        elif not isinstance(result, (str, int, float, bool, dict, list, type(None))):
+            result = text
+    return {
+        "tool": record.tool,
+        "arguments": dict(record.arguments),
+        "ok": record.ok,
+        "error": record.error,
+        "latency_ms": record.latency_ms,
+        "result": result,
     }

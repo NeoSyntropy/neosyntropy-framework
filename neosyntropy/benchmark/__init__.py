@@ -9,6 +9,7 @@ from .dataset import (
 from .critic import Critic, ExactMatchCritic, BackendCritic
 from .metrics import NodeAccuracyTracker, RouterAccuracyTracker, FullPathAccuracyTracker
 from .runner import BenchmarkRunner
+from .synthesizer import FSMSynthesizer
 
 __all__ = [
     "BenchmarkDataset",
@@ -22,4 +23,5 @@ __all__ = [
     "RouterAccuracyTracker",
     "FullPathAccuracyTracker",
     "BenchmarkRunner",
+    "FSMSynthesizer",
 ]

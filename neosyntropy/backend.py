@@ -443,6 +443,37 @@ class BackendClient:
         res = await self.post(path, {})
         return res.get("id", "")
 
+    async def get_tune_job(self, project_id: str, node_id: str, job_id: str) -> dict[str, Any]:
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/tune/{job_id}"
+        response = await self.get(path)
+        return response if isinstance(response, dict) else {}
+
+    async def wait_for_tune_job(self, project_id: str, node_id: str, job_id: str, poll_interval: float = 10.0) -> dict[str, Any]:
+        """Poll the tune job until it reaches a terminal state."""
+        import logging
+        import asyncio
+        logger = logging.getLogger("neosyntropy.backend")
+        logger.info(f"Waiting for tune job {job_id} on node {node_id} (project {project_id}) to complete...")
+        
+        while True:
+            try:
+                # We assume GET /observability/projects/{project_id}/nodes/{node_id}/tune/{job_id} exists.
+                # If it doesn't, we might need to adjust this endpoint.
+                path = f"/observability/projects/{project_id}/nodes/{node_id}/tune/{job_id}"
+                job = await self.get(path)
+                if not isinstance(job, dict):
+                    job = {"status": "unknown"}
+            except Exception as e:
+                logger.warning(f"Failed to poll tune job {job_id}: {e}")
+                job = {"status": "unknown"}
+                
+            status = job.get("status", "").lower()
+            if status in ("succeeded", "failed", "completed", "error", "cancelled"):
+                logger.info(f"Tune job {job_id} reached terminal state: {status}")
+                return job
+                
+            await asyncio.sleep(poll_interval)
+
     def _get(
         self,
         path: str,

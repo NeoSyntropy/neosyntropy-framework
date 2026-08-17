@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 from typing import Any
 from pydantic import BaseModel
-from ..backend import BackendClient, BackendProvider
+from ..backend import BackendClient
 
 
 class CriticVerdict(BaseModel):
@@ -79,7 +79,7 @@ class ExactMatchCritic(Critic):
 
 
 class BackendCritic(Critic):
-    """Critic that delegates evaluation to the backend's judge endpoint."""
+    """Critic that delegates scoring to the backend's /eval/judge endpoint."""
 
     def __init__(self, client: BackendClient, project_id: str, model: str = "gemini-2.5-flash"):
         self.client = client
@@ -94,13 +94,26 @@ class BackendCritic(Critic):
         expected_output: dict[str, Any] | None = None,
         criteria: list[str] | None = None,
     ) -> CriticVerdict:
-        # Since this evaluates locally, we can either call a general /inference endpoint 
-        # or rely on the runner to trigger the backend's judge on recorded samples.
-        # For inline evaluation, we'll return a placeholder indicating backend evaluation is pending.
+        if expected_output is None:
+            return CriticVerdict(
+                passed=False,
+                score=0.0,
+                reason="No gold label to judge against.",
+            )
+        payload = await self.client.judge_output(
+            self.project_id,
+            actual_output=actual_output,
+            ground_truth=expected_output,
+            node_id=target_node_id,
+        )
+        match = bool(payload.get("match"))
+        raw_score = payload.get("score")
+        score = float(raw_score) if isinstance(raw_score, (int, float)) else (1.0 if match else 0.0)
         return CriticVerdict(
-            passed=False, 
-            score=0.0, 
-            reason="BackendCritic defers evaluation to the backend's /judge endpoint. Run evaluate_with_backend_judge."
+            passed=match,
+            score=score,
+            reason=str(payload.get("reason") or ""),
+            metadata={"critic_model": self.model, **(payload if isinstance(payload, dict) else {})},
         )
 
     async def evaluate_router(
@@ -111,9 +124,19 @@ class BackendCritic(Critic):
         expected_route: str,
         criteria: list[str] | None = None,
     ) -> CriticVerdict:
+        payload = await self.client.judge_output(
+            self.project_id,
+            actual_output={"chosen_next_node": actual_route},
+            ground_truth={"chosen_next_node": expected_route},
+            node_id=target_router_id,
+        )
+        match = bool(payload.get("match"))
+        raw_score = payload.get("score")
+        score = float(raw_score) if isinstance(raw_score, (int, float)) else (1.0 if match else 0.0)
         return CriticVerdict(
-            passed=False,
-            score=0.0,
-            reason="BackendCritic defers evaluation to the backend's /judge endpoint."
+            passed=match,
+            score=score,
+            reason=str(payload.get("reason") or ""),
+            metadata={"critic_model": self.model},
         )
 
