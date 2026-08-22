@@ -604,6 +604,69 @@ class FSM:
             **kwargs,
         )
 
+    def run_batch(
+        self,
+        requests: list[Any],
+        *,
+        batch_size: int = 50,
+        client: Any = None,
+        tools: Any = None,
+        until_end: bool = True,
+        max_cycles: int = 32,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Run the FSM over a batch of requests concurrently using a thread pool."""
+        from concurrent.futures import ThreadPoolExecutor
+        
+        results = []
+        # Limit the number of concurrent threads to batch_size
+        max_workers = min(batch_size, len(requests)) if requests else 1
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    self.run,
+                    req,
+                    client=client,
+                    tools=tools,
+                    until_end=until_end,
+                    max_cycles=max_cycles,
+                    **kwargs
+                )
+                for req in requests
+            ]
+            for future in futures:
+                results.append(future.result())
+        return results
+
+    async def arun_batch(
+        self,
+        requests: list[Any],
+        *,
+        batch_size: int = 50,
+        client: Any = None,
+        tools: Any = None,
+        until_end: bool = True,
+        max_cycles: int = 32,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Async run the FSM over a batch of requests concurrently."""
+        import asyncio
+        
+        async def _bounded_arun(semaphore: asyncio.Semaphore, req: Any):
+            async with semaphore:
+                return await self.arun(
+                    req,
+                    client=client,
+                    tools=tools,
+                    until_end=until_end,
+                    max_cycles=max_cycles,
+                    **kwargs
+                )
+                
+        semaphore = asyncio.Semaphore(batch_size)
+        tasks = [_bounded_arun(semaphore, req) for req in requests]
+        return await asyncio.gather(*tasks)
+
     def _normalize_request(
         self,
         request: Any,
@@ -811,6 +874,7 @@ def Workflow(
     sequence: list[FSMNode] | tuple[FSMNode, ...],
     *,
     fallback: FSMNode | None = None,
+    entry: Any = None,
 ) -> FSM:
     """Build a linear FSM from an ordered node list.
 
@@ -828,14 +892,12 @@ def Workflow(
         raise FSMValidationError(
             ["Workflow requires a fallback node (exactly one per FSM)"]
         )
-    if isinstance(fallback, Node) and not fallback.is_fallback:
-        raise FSMValidationError(
-            [f"fallback node {fallback.id!r} must set is_fallback=True"]
-        )
     if isinstance(fallback, CombineNode):
         raise FSMValidationError(
             ["fallback cannot be a CombineNode; use SchemaNode(..., is_fallback=True)"]
         )
+    if isinstance(fallback, Node) and not fallback.is_fallback:
+        fallback = fallback.model_copy(update={"is_fallback": True})
 
     first = steps[0]
     edges: list[Edge] = []
@@ -844,11 +906,19 @@ def Workflow(
             edge_deterministic(_exit_id(steps[index]), _entry_id(steps[index + 1]))
         )
     edges.append(edge_deterministic(_exit_id(steps[-1]), END))
-    edges.append(edge_fallback(_entry_id(first), fallback.id))
+    if entry is None:
+        first = steps[0]
+        edges.append(edge_fallback(_entry_id(first), fallback.id))
+        entry_target = first
+    else:
+        edges.append(edge_fallback(_entry_id(entry), fallback.id))
+        entry_target = entry
 
+    is_router = hasattr(entry_target, "routes") # Simple check for router
     return FSM(
         nodes=[*steps, fallback],
-        entry=first,
+        routers=[entry_target] if is_router else [],
+        entry=entry_target,
         edges=edges,
     )
 
