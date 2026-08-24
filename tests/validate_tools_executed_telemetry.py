@@ -31,7 +31,7 @@ from neosyntropy import (
 )
 from neosyntropy.core.models import GenerateResult, ToolCall
 from neosyntropy.observability import BackendTelemetryReporter
-from neosyntropy.tools.calling import ToolCallingLoop
+from neosyntropy.tools.communication.calling import ToolCallingLoop
 
 VERTEX_MODEL = "gemini-2.5-flash"
 TESTS_ENV_PATH = Path(__file__).resolve().parent / ".env"

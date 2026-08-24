@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from neosyntropy.tools.coding_tools import CodingTools, CodingToolsError
-from neosyntropy.tools.registry import ToolRegistry
+from neosyntropy.tools.coding.coding_tools import CodingTools, CodingToolsError
+from neosyntropy.tools.core.registry import ToolRegistry
 
 
 @pytest.fixture

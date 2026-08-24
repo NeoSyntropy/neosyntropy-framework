@@ -174,6 +174,9 @@ class SemanticRouter:
         )
         object.__setattr__(self, "json_schema", schema)
         object.__setattr__(self, "input_model", model)
+        from ..core.node import Node
+        if isinstance(self.fallback_node, Node) and not getattr(self.fallback_node, "is_fallback", False):
+            object.__setattr__(self, "fallback_node", self.fallback_node.model_copy(update={"is_fallback": True}))
 
     def compile(self) -> list[Edge]:
         edges: list[Edge] = []

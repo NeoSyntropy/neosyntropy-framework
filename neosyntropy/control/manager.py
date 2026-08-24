@@ -44,10 +44,9 @@ from ..core.models import (
     Topology,
 )
 from ..core.state import StateConflictError, StateManager
-from ..observability import (
-    BackendTelemetryReporter,
-    RunObserver,
-    best_effort_call,
+from ..monitor.base import RunObserver, best_effort_call
+from ..monitor.run.observer import BackendTelemetryReporter
+from ..monitor.graph.manifest import (
     control_graph_manifest,
     graph_manifest,
 )
@@ -56,7 +55,7 @@ from ..routing.backend_route import BackendSemanticRouter
 from ..routing.base import Router
 from ..routing.preferred import PreferredPathRouter
 
-from ..tools.registry import ToolNotAllowedError, ToolRegistry
+from ..tools.core.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
 from .logging import DecisionLogger
 from .validator import PlanValidationError, PlanValidator

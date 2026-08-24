@@ -13,7 +13,7 @@ from neosyntropy import (
     TextOutput,
     edge_deterministic,
 )
-from neosyntropy.observability import graph_manifest
+from neosyntropy.monitor.graph.manifest import graph_manifest
 
 
 class _Out(BaseModel):

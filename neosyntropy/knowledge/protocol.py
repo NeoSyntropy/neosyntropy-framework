@@ -10,125 +10,98 @@ This protocol enables:
 - Type safety with Protocol typing
 """
 
-from typing import Callable, List, Protocol, runtime_checkable
+from typing import Any, Callable, Iterable, List, Optional, Protocol, runtime_checkable
 
 from neosyntropy.knowledge.document import Document
 
 
+
+
 @runtime_checkable
 class KnowledgeProtocol(Protocol):
-    """Minimal protocol for knowledge implementations.
+    """Protocol for a core knowledge base that manages storage and vector DBs."""
+    
+    vector_dbs: List[Any]
+    databases: List[Any]
 
-    Enables custom knowledge bases to be used with agents.
-    Each implementation defines what tools it exposes and what
-    context/instructions it provides to the agent.
+    def insert(self, data: Any, **kwargs: Any) -> Any:
+        """Insert data into the knowledge base."""
+        ...
+        
+    def delete(self, **kwargs: Any) -> Any:
+        """Delete data from the knowledge base."""
+        ...
 
-    Required methods:
-    - build_context(): Return instructions for the agent's system prompt
-    - get_tools(): Return tools to expose to the agent
-    - aget_tools(): Async version of get_tools
-
-    Optional methods:
-    - retrieve(): Default retrieval for context injection (add_knowledge_to_context)
-    - aretrieve(): Async version of retrieve
-
-    Example:
-        ```python
-        from neosyntropy.knowledge.protocol import KnowledgeProtocol
-        from neosyntropy.knowledge.document import Document
-
-        class MyKnowledge:
-            def build_context(self, **kwargs) -> str:
-                return "Use search_docs to find information."
-
-            def get_tools(self, **kwargs) -> List[Callable]:
-                return [self.search_docs]
-
-            async def aget_tools(self, **kwargs) -> List[Callable]:
-                return [self.search_docs]
-
-            def search_docs(self, query: str) -> str:
-                # Your search implementation
-                return "Results for: " + query
-
-            # Optional: for add_knowledge_to_context feature
-            def retrieve(self, query: str, **kwargs) -> List[Document]:
-                results = self._internal_search(query)
-                return [Document(content=r) for r in results]
-
-        # MyKnowledge satisfies KnowledgeProtocol
-        # agent = Agent(knowledge=MyKnowledge())
-        ```
+    def get(self, **kwargs: Any) -> Any:
+        """get items from the knowledge base."""
+        ...
+        
+@runtime_checkable
+class KnowledgeTransformProtocol(Protocol):
+    """Protocol for knowledge ingestion, transformation, and storage.
+    
+    This protocol defines the ETL pipeline for a knowledge base. It loads raw data (`load`),
+    builds the processing workflow (`build_workflow`), executes the transform (`transform`),
+    and stores the processed results (`store`).
     """
 
-    def build_context(self, **kwargs) -> str:
-        """Build context string for the agent's system prompt.
-
-        Returns instructions about how to use this knowledge,
-        what tools are available, and any usage guidelines.
-
-        Args:
-            **kwargs: Context including enable_agentic_filters, etc.
-
+    def load(self, source: Any, **kwargs) -> Any:
+        """Fetch raw data and perform initial processing (like chunking).
+        
         Returns:
-            Formatted context string to inject into system prompt.
+            A dataframe, table, or iterable of documents that can be used as input
+            for the transformation workflow.
         """
         ...
 
-    def get_tools(self, **kwargs) -> List[Callable]:
-        """Get tools to expose to the agent.
+    def build_transform_fsm(self, **kwargs) -> Any:
+        """Build and return an FSM/Workflow to process each document or row.
 
-        Returns callable tools that the agent can use to interact
-        with this knowledge. Each implementation decides what
-        tools make sense (e.g., search, grep, list_files, query_db).
-
-        Args:
-            **kwargs: Context including run_response, run_context,
-                     async_mode, enable_agentic_filters, etc.
-
-        Returns:
-            List of callable tools.
+        The `transform` process will run this FSM (which may contain SchemaNodes, etc.)
+        on all data loaded by `load()`.
         """
         ...
 
-    async def aget_tools(self, **kwargs) -> List[Callable]:
-        """Async version of get_tools.
-
-        Args:
-            **kwargs: Same as get_tools.
-
-        Returns:
-            List of callable tools.
+    def transform(self, source: "KnowledgeProtocol", destination: Optional["KnowledgeProtocol"] = None, **kwargs) -> Any:
+        """Execute the transformation pipeline between knowledge bases.
+        
+        Gets the knowledge source, uses `build_transform_fsm()` to process/transform 
+        the data using an FSM, and stores the results in the knowledge destination.
         """
         ...
 
-    # Optional methods - used by add_knowledge_to_context feature
-    # Implementations that don't support context injection can omit these
+    def store(self, data: Any, destination: Any, **kwargs) -> Any:
+        """Store the processed results (e.g., into a Vector DB or storage)."""
+        ...
+       
+@runtime_checkable
+class KnowledgeReasoningProtocol(Protocol):
+    """Protocol for knowledge retrieval and reasoning.
+    
+    This acts as a retrieval node interface that helps developers build an FSM 
+    specifically for reasoning over knowledge. It takes the heavy lifting of 
+    retrieval and tools away from the main fsm.
+    """
 
-    def retrieve(self, query: str, **kwargs) -> List[Document]:
-        """Retrieve documents for context injection.
-
-        Used by the add_knowledge_to_context feature to pre-fetch
-        relevant documents into the user message. This is optional;
-        if not implemented, add_knowledge_to_context will be skipped.
-
-        Args:
-            query: The query string.
-            **kwargs: Additional parameters (max_results, filters, etc.)
-
-        Returns:
-            List of Document objects.
+    def build_reasoning_fsm(self, knowledge: KnowledgeProtocol, **kwargs) -> Any:
+        """Build and return a knowledge distillation/reasoning FSM.
+        
+        This workflow is executed to distill information, execute schema steps, 
+        and perform reasoning before returning the final context to the user or agent.
         """
         ...
 
-    async def aretrieve(self, query: str, **kwargs) -> List[Document]:
-        """Async version of retrieve.
-
-        Args:
-            query: The query string.
-            **kwargs: Additional parameters.
-
-        Returns:
-            List of Document objects.
+    def search(self, knowledge: KnowledgeProtocol, **kwargs: Any) -> Any:
+        """Search the knowledge base or run reasoning over it.
+        
+        This handles search logic and uses `build_reasoning_workflow()` to process,
+        distill, and execute reasoning. The input query/input schema is passed via kwargs.
         """
         ...
+        
+    async def asearch(self, knowledge: KnowledgeProtocol, **kwargs: Any) -> Any:
+        """Async version of search, using `build_reasoning_workflow()` for reasoning."""
+        ...
+
+
+

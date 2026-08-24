@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from neosyntropy.tools.ast_tools import AstTools, AstToolsError
-from neosyntropy.tools.registry import ToolRegistry
+from neosyntropy.tools.coding.ast_tools import AstTools, AstToolsError
+from neosyntropy.tools.core.registry import ToolRegistry
 
 
 @pytest.fixture

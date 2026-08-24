@@ -25,8 +25,8 @@ from ..core.node import (
     NodeContext,
 )
 from ..providers.base import ProviderRegistry
-from ..tools.calling import ToolCallingLoop, expects_json_object
-from ..tools.registry import BoundTools, ToolNotAllowedError, ToolRegistry
+from ..tools.communication.calling import ToolCallingLoop, expects_json_object
+from ..tools.core.registry import BoundTools, ToolNotAllowedError, ToolRegistry
 
 
 class TopologyExecutor:
@@ -83,7 +83,7 @@ class TopologyExecutor:
         )
 
         try:
-            if definition.handler is not None:
+            if definition.handler is not None and definition.kind == "handler":
                 raw = definition.handler(node_context)
                 if inspect.isawaitable(raw):
                     raw = await raw
@@ -126,8 +126,21 @@ class TopologyExecutor:
 
                 if output_schema is not None and expects_json_object(output_schema):
                     output_value = _parse_structured(output_text)
+                    
+                    if definition.handler is not None and definition.kind == "schema":
+                        # Validate the JSON into the pydantic model if available
+                        if definition.output_model:
+                            validated = definition.output_model(**output_value)
+                            raw_out = definition.handler(validated)
+                        else:
+                            raw_out = definition.handler(output_value)
+                            
+                        if inspect.isawaitable(raw_out):
+                            raw_out = await raw_out
+                        output_value = raw_out
                 else:
                     output_value = output_text
+                    
                 raw = NodeResult(node_id=definition.id, output=output_value)
         except ToolNotAllowedError:
             raise

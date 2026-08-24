@@ -2,17 +2,17 @@
 
 
 
-Built-in adapters (Agno-style) live alongside the registry, e.g.
+Built-in adapters (NeoSyntropy-style) live alongside the registry, e.g.
 
-:mod:`neosyntropy.tools.emailjs`, :mod:`neosyntropy.tools.ast_tools`,
+:mod:`neosyntropy.tools.email.email`, :mod:`neosyntropy.tools.coding.ast_tools`,
 
-and :mod:`neosyntropy.tools.coding_tools`.
+and :mod:`neosyntropy.tools.coding.coding_tools`.
 
 """
 
 
 
-from .ast_tools import (
+from .coding.ast_tools import (
 
     AnalyzeFileArgs,
 
@@ -26,7 +26,9 @@ from .ast_tools import (
 
 )
 
-from .coding_tools import (
+from .core.toolkit import Toolkit
+
+from .coding.coding_tools import (
 
     CodingTools,
 
@@ -52,21 +54,9 @@ from .coding_tools import (
 
 )
 
-from .emailjs import (
 
-    EmailJSClient,
 
-    EmailJSCredentials,
-
-    EmailJSError,
-
-    EmailJSTools,
-
-    SendEmailArgs,
-
-)
-
-from .registry import (
+from .core.registry import (
 
     DEFAULT_REGISTRY,
 
@@ -92,6 +82,8 @@ from .registry import (
 
 __all__ = [
 
+    "Toolkit",
+
     "AnalyzeFileArgs",
 
     "AstAnalyzer",
@@ -114,14 +106,6 @@ __all__ = [
 
     "EditFileArgs",
 
-    "EmailJSClient",
-
-    "EmailJSCredentials",
-
-    "EmailJSError",
-
-    "EmailJSTools",
-
     "FindArgs",
 
     "FindBareExceptsArgs",
@@ -135,8 +119,6 @@ __all__ = [
     "RegisteredTool",
 
     "RunShellArgs",
-
-    "SendEmailArgs",
 
     "ToolInvocation",
 

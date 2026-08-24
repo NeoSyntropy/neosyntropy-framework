@@ -47,22 +47,25 @@ class Client:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None = None,
+        access_token: str | None = None,
         project_id: str | None = None,
         base_url: str = DEFAULT_API_URL,
         timeout: float = 180.0,
         # Neon round-trips often exceed 2s; short budgets orphan runs with 0 events.
         telemetry_timeout: float = 15.0,
     ) -> None:
-        if not api_key:
-            raise ValueError("api_key is required")
+        if not api_key and not access_token:
+            raise ValueError("api_key or access_token is required")
         if project_id is not None and not str(project_id).strip():
             raise ValueError("project_id must be non-empty when provided")
         self.api_key = api_key
+        self.access_token = access_token
         self.project_id = str(project_id).strip() if project_id is not None else None
         self.base_url = base_url
         self._backend = BackendClient(
             base_url,
+            access_token=access_token,
             api_key=api_key,
             project_id=self.project_id,
             timeout=timeout,
@@ -98,6 +101,15 @@ class Client:
                 "create_project(name, slug)."
             )
         return self._backend
+
+    async def start_tune_job(self, node_id: str) -> str:
+        """Trigger a tuning job for a specific node in this client's project."""
+        if not self.project_id:
+            raise ValueError(
+                "project_id is required to start a tune job. Ensure you have "
+                "created or bound to a project first."
+            )
+        return await self._backend.start_tune_job(self.project_id, node_id)
 
 
 class BackendClient:
@@ -480,7 +492,7 @@ class BackendClient:
         *,
         timeout: float | None = None,
     ) -> dict[str, Any] | list[Any]:
-        token = self.api_key or self.access_token
+        token = self.access_token or self.api_key
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -542,7 +554,7 @@ class BackendClient:
         *,
         timeout: float | None = None,
     ) -> dict[str, Any]:
-        token = self.api_key or self.access_token
+        token = self.access_token or self.api_key
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",

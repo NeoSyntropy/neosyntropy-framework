@@ -40,7 +40,7 @@ from neosyntropy import (
     edge_fallback,
     tool,
 )
-from neosyntropy.tools.coding_tools import CodingTools
+from neosyntropy.tools.coding.coding_tools import CodingTools
 
 COOKBOOK_DIR = Path(__file__).resolve().parent
 SAMPLE_REPO = COOKBOOK_DIR / "sample_repo"

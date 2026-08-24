@@ -27,7 +27,9 @@ from .models import ExecutionRecord, Message, NodeResult
 from .schemas import input_model_schema, strict_model_schema
 
 if TYPE_CHECKING:
-    from ..tools.registry import BoundTools
+    from ..knowledge.protocol import KnowledgeReasoningProtocol
+    from ..tools.core.registry import BoundTools
+    from ..vectordb.base import VectorDb
 
 NodeMode = Literal["reasoning", "schema_extraction"]
 NodeKind = Literal["schema", "reasoning", "handler", "combine_part"]
@@ -198,13 +200,43 @@ class Node(BaseModel):
             return f"node {self.id!r} input_schema is invalid: {exc.message}"
         return None
 
+    async def __call__(self, client: Any, **input_data: Any) -> Any:
+        """Execute this node directly as a function.
+
+        This handles LLM schema extraction and automatically calls the wrapped 
+        handler function (if one is attached) using the extracted parameters.
+        """
+        from .graph import Workflow
+        
+        # Create a temporary single-node workflow to execute this node
+        fallback = SchemaNode(
+            id="temp_fallback",
+            input_schema=self.input_schema,
+            output_schema=self.input_schema,
+            prompt="Dummy fallback",
+            is_fallback=True
+        )
+        fsm = Workflow([self], fallback=fallback)
+        
+        # Validate the input data against the node's input model if it exists
+        if self.input_model:
+            validated_input = self.input_model(**input_data)
+        else:
+            validated_input = input_data
+            
+        result = await fsm.arun(validated_input, client=client)
+        if hasattr(result, "final_state"):
+            return result.final_state
+        return result
+
 
 def SchemaNode(
     id: str,
     *,
     input_schema: type[BaseModel] | dict[str, Any],
-    output_schema: type[BaseModel] | dict[str, Any],
     prompt: str,
+    output_schema: type[BaseModel] | dict[str, Any] | None = None,
+    func: Callable[..., Any] | None = None,
     name: str | None = None,
     description: str = "",
     prerequisites: Sequence[str] = (),
@@ -213,9 +245,36 @@ def SchemaNode(
     metadata: dict[str, Any] | None = None,
     provider: str = "neosyntropy/base",
 ) -> Node:
-    """Provider-backed schema extraction: constrained JSON, no tools."""
+    """Provider-backed schema extraction: constrained JSON, no tools.
+    
+    If ``func`` is provided, the node will use the LLM to extract the function's 
+    parameters (derived from the function's type hints) and then execute the function.
+    """
+    import inspect
+
     if not prompt:
         raise ValueError(f"SchemaNode {id!r} requires prompt")
+
+    resolved_output_schema = output_schema
+
+    if func is not None:
+        if resolved_output_schema is None:
+            import typing
+            hints = typing.get_type_hints(func)
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+            if not params:
+                raise ValueError(f"Function {func.__name__} must take at least one parameter to derive output_schema.")
+            
+            first_param_name = params[0]
+            if first_param_name not in hints:
+                raise ValueError(f"Function {func.__name__} parameter '{first_param_name}' must have a type hint (e.g. a BaseModel).")
+            
+            resolved_output_schema = hints[first_param_name]
+
+    if resolved_output_schema is None:
+        raise ValueError(f"SchemaNode {id!r} requires either output_schema or func with typed parameters")
+
     return Node(
         **_shared_kwargs(
             id=id,
@@ -232,17 +291,36 @@ def SchemaNode(
         mode="schema_extraction",
         kind="schema",
         input_schema=input_schema,
-        output_schema=output_schema,
-        handler=None,
+        output_schema=resolved_output_schema,
+        handler=func,
     )
+
+
+@dataclass
+class ReasoningStep:
+    """A single step in a multi-step reasoning flow.
+    
+    Attributes:
+        instruction: The prompt/instruction for this specific step.
+        tools: The tools available in this step (typically limited to 3).
+        max_tools: The maximum number of tools allowed for this step (default: 3).
+    """
+    instruction: str
+    tools: Sequence[str] = ()
+    max_tools: int = 3
+
+    def __post_init__(self):
+        if len(self.tools) > self.max_tools:
+            raise ValueError(f"ReasoningStep cannot have more than {self.max_tools} tools.")
 
 
 def ReasoningNode(
     id: str,
     *,
     input_schema: type[BaseModel] | dict[str, Any],
-    tools: Sequence[str],
-    prompt: str,
+    tools: Sequence[str] = (),
+    prompt: str = "",
+    steps: Sequence[ReasoningStep] | None = None,
     name: str | None = None,
     description: str = "",
     prerequisites: Sequence[str] = (),
@@ -250,13 +328,50 @@ def ReasoningNode(
     is_fallback: bool = False,
     metadata: dict[str, Any] | None = None,
     provider: str = "neosyntropy/base",
-) -> Node:
-    """Provider-backed reasoning: tools allowed, plain-text notes out."""
+    output_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> Any:
+    """Provider-backed reasoning: tools allowed, optional structured output."""
+    if steps:
+        from .graph import Workflow
+        
+        nodes = []
+        for i, step in enumerate(steps):
+            node_id = f"{id}_step_{i}"
+            nodes.append(
+                Node(
+                    **_shared_kwargs(
+                        id=node_id,
+                        name=name if i == 0 else node_id,
+                        description=description if i == 0 else "",
+                        prompt=step.instruction,
+                        prerequisites=prerequisites if i == 0 else (),
+                        group=group,
+                        is_fallback=is_fallback,
+                        metadata=metadata,
+                        provider=provider,
+                    ),
+                    tools=tuple(step.tools),
+                    mode="reasoning",
+                    kind="reasoning",
+                    input_schema=input_schema if i == 0 else {"type": "object"},
+                    output_schema={"type": "object"} if i < len(steps)-1 else (output_schema or REASONING_OUTPUT_SCHEMA),
+                    handler=None,
+                )
+            )
+            
+        fallback = SchemaNode(
+            id=f"{id}_fallback",
+            input_schema=input_schema,
+            output_schema=output_schema or REASONING_OUTPUT_SCHEMA,
+            prompt=f"Fallback logic for {id} reasoning steps",
+            is_fallback=True
+        )
+        return Workflow(nodes, fallback=fallback, entry=nodes[0])
+
     if not prompt:
-        raise ValueError(f"ReasoningNode {id!r} requires prompt")
+        raise ValueError(f"ReasoningNode {id!r} requires prompt or steps")
+        
     tool_names = tuple(tools)
-    if not tool_names:
-        raise ValueError(f"ReasoningNode {id!r} requires tools")
     return Node(
         **_shared_kwargs(
             id=id,
@@ -273,7 +388,7 @@ def ReasoningNode(
         mode="reasoning",
         kind="reasoning",
         input_schema=input_schema,
-        output_schema=REASONING_OUTPUT_SCHEMA,
+        output_schema=output_schema or REASONING_OUTPUT_SCHEMA,
         handler=None,
     )
 
@@ -458,3 +573,87 @@ def node(
         )
 
     return decorator
+def retrieval_node(
+    id: str,
+    vector_db: VectorDb | KnowledgeReasoningProtocol | None = None,
+    query_key: str = "query",
+    output_key: str = "context",
+    limit: int = 5,
+    description: str = "Retrieves semantic context from the knowledge base or vector database.",
+    name: str | None = None,
+    group: str | None = None,
+    format_as_string: bool = False,
+    knowledge: KnowledgeReasoningProtocol | VectorDb | None = None,
+    **kwargs: Any,
+) -> Node:
+    """Create an FSM Node that queries a KnowledgeReasoningProtocol or VectorDb and injects results into state.
+
+    Args:
+        id: Unique node id.
+        vector_db: The VectorDb or Knowledge instance to query.
+        query_key: The state key containing the search query string.
+        output_key: The state key where the retrieved results will be written.
+        limit: Max number of documents to retrieve.
+        description: Node description for observability.
+        name: Optional human-readable name.
+        group: Optional group this node belongs to.
+        format_as_string: If True, joins document content into a single string.
+            If False, returns a list of dictionaries with content and metadata.
+        knowledge: Alternative parameter name for KnowledgeReasoningProtocol or VectorDb instance.
+        **kwargs: Additional kwargs passed to the base Node.
+    """
+    target_knowledge = knowledge or vector_db
+    if target_knowledge is None:
+        raise ValueError("Either 'knowledge' or 'vector_db' must be provided to retrieval_node.")
+
+    def handler(state: dict[str, Any]) -> NodeResult:
+        query = state.get(query_key)
+        if not query:
+            return NodeResult(
+                node_id=id,
+                status="failed",
+                error=f"Missing query key {query_key!r} in state.",
+                state_updates={}
+            )
+            
+        try:
+            docs = target_knowledge.search(query=query, limit=limit)
+        except Exception as e:
+            return NodeResult(
+                node_id=id,
+                status="failed",
+                error=f"Knowledge retrieval search failed: {e}",
+                state_updates={}
+            )
+            
+        if format_as_string:
+            formatted_docs = "\n\n".join(doc.content for doc in docs)
+        else:
+            formatted_docs = [
+                {
+                    "content": doc.content,
+                    "meta_data": getattr(doc, "meta_data", getattr(doc, "metadata", {}))
+                }
+                for doc in docs
+            ]
+            
+        return NodeResult(
+            node_id=id,
+            status="succeeded",
+            state_updates={output_key: formatted_docs}
+        )
+
+    # Use dicts for simple input/output schemas unless overriding via kwargs
+    input_schema = kwargs.pop("input_schema", {"type": "object", "required": [query_key]})
+    output_schema = kwargs.pop("output_schema", {"type": "object", "required": [output_key]})
+
+    return Node(
+        id=id,
+        name=name or id,
+        description=description,
+        handler=handler,
+        input_schema=input_schema,
+        output_schema=output_schema,
+        group=group,
+        **kwargs
+    )

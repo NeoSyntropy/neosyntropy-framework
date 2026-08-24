@@ -60,6 +60,8 @@ class FileSystemKnowledge:
     exclude_patterns: List[str] = field(
         default_factory=lambda: [".git", "__pycache__", "node_modules", ".venv", "venv"]
     )
+    vector_dbs: List[Any] = field(default_factory=list)
+    databases: List[Any] = field(default_factory=list)
 
     def __post_init__(self):
         self.base_path = Path(self.base_dir).resolve()
@@ -241,40 +243,8 @@ class FileSystemKnowledge:
         return results
 
     # ========================================================================
-    # Protocol Implementation (build_context, get_tools, retrieve)
+    # Protocol Implementation (get_tools, retrieve)
     # ========================================================================
-
-    def build_context(self, **kwargs) -> str:
-        """Build context string for the agent's system prompt.
-
-        Returns instructions about the three available filesystem tools.
-
-        Args:
-            **kwargs: Additional context (unused).
-
-        Returns:
-            Context string describing available tools.
-        """
-        from textwrap import dedent
-
-        return dedent(
-            f"""
-            You have access to a filesystem knowledge base containing documents at: {self.base_dir}
-            
-            IMPORTANT: You MUST use these tools to search and read files before answering questions.
-            Do NOT answer from your own knowledge - always search the files first.
-
-            Available tools:
-            - grep_file(query): Search for keywords or patterns in file contents. Use this to find relevant information.
-            - list_files(pattern): List available files. Use "*" to see all files, or "*.md" for specific types.
-            - get_file(path): Read the full contents of a specific file.
-
-            When answering questions:
-            1. First use grep_file to search for relevant terms in the documents
-            2. Or use list_files to see what documents are available, then get_file to read them
-            3. Base your answer on what you find in the files
-            """
-        ).strip()
 
     def get_tools(self, **kwargs) -> List[Any]:
         """Get tools to expose to the agent.
@@ -299,7 +269,7 @@ class FileSystemKnowledge:
 
     def _create_grep_tool(self) -> Any:
         """Create the grep_file tool."""
-        from neosyntropy.tools.function import Function
+        from neosyntropy.tools.core.function import Function
 
         def grep_file(query: str, max_results: int = 20) -> str:
             """Search the knowledge base files for a keyword or pattern.
@@ -329,7 +299,7 @@ class FileSystemKnowledge:
 
     def _create_list_files_tool(self) -> Any:
         """Create the list_files tool."""
-        from neosyntropy.tools.function import Function
+        from neosyntropy.tools.core.function import Function
 
         def list_files(pattern: str = "*", max_results: int = 50) -> str:
             """List available files in the knowledge base.
@@ -355,7 +325,7 @@ class FileSystemKnowledge:
 
     def _create_get_file_tool(self) -> Any:
         """Create the get_file tool."""
-        from neosyntropy.tools.function import Function
+        from neosyntropy.tools.core.function import Function
 
         def get_file(path: str) -> str:
             """Read the full contents of a document from the knowledge base.
@@ -382,32 +352,112 @@ class FileSystemKnowledge:
 
         return Function.from_callable(get_file, name="get_file")
 
-    def retrieve(
-        self,
-        query: str,
-        max_results: Optional[int] = None,
-        **kwargs,
-    ) -> List[Document]:
-        """Retrieve documents for context injection.
+    def search(self, **kwargs: Any) -> Any:
+        """Search the knowledge base for relevant documents or context.
 
-        Uses grep as the default retrieval method since it's most likely
-        to return relevant results for a natural language query.
+        Uses grep as the default search method. Executes reasoning using `build_reasoning_fsm`.
 
         Args:
-            query: The query string.
-            max_results: Maximum number of results.
-            **kwargs: Additional parameters.
+            **kwargs: Additional parameters including `query` and `max_results`.
 
         Returns:
-            List of Document objects.
+            List of Document objects or generic result.
         """
+        query = kwargs.get("query", "")
+        max_results = kwargs.get("max_results")
         return self._grep(query, max_results=max_results or 10)
 
-    async def aretrieve(
-        self,
-        query: str,
-        max_results: Optional[int] = None,
-        **kwargs,
-    ) -> List[Document]:
-        """Async version of retrieve."""
-        return self.retrieve(query, max_results=max_results, **kwargs)
+    # Backwards compatibility alias
+    retrieve = search
+
+    async def asearch(self, **kwargs: Any) -> Any:
+        """Async version of search."""
+        return self.search(**kwargs)
+
+    # Backwards compatibility alias
+    aretrieve = asearch
+
+    def build_reasoning_fsm(self, steps: Optional[List[Any]] = None, **kwargs) -> Any:
+        """Build and return a multi-step reasoning FSM.
+        
+        Uses `ReasoningStep`s to sequence exploration through the filesystem.
+        """
+        from neosyntropy.core.node import ReasoningNode, ReasoningStep, SchemaNode
+        from neosyntropy.core.graph import Workflow
+        
+        if not steps:
+            steps = [
+                ReasoningStep(
+                    instruction="List available files to find documents relevant to the query.",
+                    tools=["list_files"]
+                ),
+                ReasoningStep(
+                    instruction="Search for specific keywords within the identified files.",
+                    tools=["grep_file"]
+                ),
+                ReasoningStep(
+                    instruction="Read the full contents of the most relevant files.",
+                    tools=["get_file"]
+                )
+            ]
+            
+        return ReasoningNode(
+            id="fs_reasoning",
+            steps=steps,
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+
+    # ========================================================================
+    # KnowledgeTransformProtocol & KnowledgeProtocol Implementation
+    # ========================================================================
+
+    def insert(self, data: Any, **kwargs: Any) -> Any:
+        """Insert data into the knowledge base (stub for filesystem)."""
+        log_warning("insert() is not fully supported for FileSystemKnowledge")
+        return self.store(data, destination=self, **kwargs)
+
+    def delete(self, **kwargs: Any) -> Any:
+        """Delete data from the knowledge base (stub for filesystem)."""
+        log_warning("delete() is not fully supported for FileSystemKnowledge")
+        return False
+
+    def load(self, source: Any = None, **kwargs) -> Any:
+        """Fetch raw data from the filesystem."""
+        return self._list_files("*", max_results=1000)
+
+    def build_transform_fsm(self, **kwargs) -> Any:
+        """Build a basic workflow for chunking/transforming file contents."""
+        from neosyntropy.core.node import node, SchemaNode
+        from neosyntropy.core.graph import Workflow
+        
+        @node(id="read_and_chunk", input_schema={"type": "object"}, output_schema={"type": "object"})
+        def read_and_chunk(state: dict) -> dict:
+            # Basic dummy transform logic
+            return {"status": "transformed"}
+            
+        fallback = SchemaNode(
+            id="fs_transform_fallback",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            prompt="Fallback logic for filesystem transform",
+            is_fallback=True
+        )
+        return Workflow([read_and_chunk], fallback=fallback, entry=read_and_chunk)
+
+    def transform(self, source: Any = None, destination: Optional[Any] = None, **kwargs) -> Any:
+        """Execute the loading and transformation pipeline."""
+        from neosyntropy.knowledge.transform import transform as transform_decorator
+        
+        data = self.load(source, **kwargs)
+        processed = [{"content": doc.content, "meta": doc.meta_data} for doc in data]
+        if destination:
+            self.store(processed, destination, **kwargs)
+        return processed
+
+    def store(self, data: Any, destination: Any, **kwargs) -> Any:
+        """Store transformed data to the destination (e.g., VectorDb)."""
+        if hasattr(destination, "add_documents"):
+            destination.add_documents(data)
+        return True
+

@@ -11,7 +11,7 @@ from neosyntropy import (
     edge_deterministic,
 )
 from neosyntropy.backend import _control_api_graph
-from neosyntropy.observability import _router_providers
+from neosyntropy.monitor.graph.manifest import _router_providers
 
 
 def test_control_api_graph_includes_router_providers() -> None:
