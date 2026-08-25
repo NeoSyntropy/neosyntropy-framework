@@ -73,6 +73,7 @@ class Group(RuntimeModel):
         edges: Sequence[Any] | None = None,
         groups: Sequence[Group] | None = None,
         namespace: bool | None = None,
+        parent: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Construct a group; optional ``nodes`` / ``edges`` / ``groups`` mirror ``FSM``.
@@ -86,13 +87,13 @@ class Group(RuntimeModel):
                 f"Group() got unexpected keyword argument(s): {sorted(kwargs)}"
             )
         do_namespace = bool(nodes) if namespace is None else bool(namespace)
-        super().__init__(
+        super().__init__(  # type: ignore
             name=name,
             description=description,
             metadata=dict(metadata or {}),
             entry=None,
             routers=[],
-            parent=None,
+            parent=parent,
         )
         object.__setattr__(self, "_namespace", do_namespace)
         object.__setattr__(self, "_child_groups", {})
@@ -146,7 +147,7 @@ class Group(RuntimeModel):
         for child in groups:
             self._add_child(child)
         # Semantic route targets that are Groups become nested children.
-        from ..routing.declarations import SemanticRouter
+        from .routing.semantic import SemanticRouter
 
         for item in rebound_routers:
             if not isinstance(item, SemanticRouter):
@@ -236,7 +237,8 @@ class Group(RuntimeModel):
         id_map: dict[str, str],
         node_map: dict[str, Any],
     ) -> Any:
-        from ..routing.declarations import DeterministicRouter, SemanticRouter
+        from .routing.deterministic import DeterministicRouter
+        from .routing.semantic import SemanticRouter
 
         def map_target(target: Any) -> Any:
             if target is None:
@@ -410,6 +412,10 @@ class Group(RuntimeModel):
             for source, target in self._edges
         ]
         return [*self._edge_objs, *from_pairs]
+
+    def compile(self) -> list[Edge]:
+        """Compile the group's declared edges. Returns compiled_edges()."""
+        return self.compiled_edges()
 
     def entry_id(self) -> str | None:
         """Resolved entry state id, or ``None`` when unset."""

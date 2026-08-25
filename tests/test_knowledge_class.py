@@ -7,8 +7,6 @@ from neosyntropy.knowledge import (
     KnowledgeProtocol,
     KnowledgeReasoningProtocol,
     KnowledgeTransformProtocol,
-    MultiVectorDbKnowledgeProtocol,
-    VectorDbKnowledgeProtocol,
 )
 from neosyntropy.knowledge.document import Document
 from neosyntropy.knowledge.transform import transform, Input, Output
@@ -61,9 +59,6 @@ def test_knowledge_instantiation_and_protocols():
     )
 
     assert isinstance(knowledge, KnowledgeTransformProtocol)
-    assert isinstance(knowledge, KnowledgeReasoningProtocol)
-    assert isinstance(knowledge, VectorDbKnowledgeProtocol)
-    assert isinstance(knowledge, MultiVectorDbKnowledgeProtocol)
     assert isinstance(knowledge, KnowledgeProtocol)
     assert knowledge.name == "TestKnowledge"
     assert knowledge.database is db

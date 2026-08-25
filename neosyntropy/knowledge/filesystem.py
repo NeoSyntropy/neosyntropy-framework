@@ -352,20 +352,21 @@ class FileSystemKnowledge:
 
         return Function.from_callable(get_file, name="get_file")
 
-    def search(self, **kwargs: Any) -> Any:
+    def search(self, query: str | None = None, **kwargs: Any) -> Any:
         """Search the knowledge base for relevant documents or context.
 
         Uses grep as the default search method. Executes reasoning using `build_reasoning_fsm`.
 
         Args:
+            query: Optional query string.
             **kwargs: Additional parameters including `query` and `max_results`.
 
         Returns:
             List of Document objects or generic result.
         """
-        query = kwargs.get("query", "")
+        search_query = query or kwargs.get("query", "")
         max_results = kwargs.get("max_results")
-        return self._grep(query, max_results=max_results or 10)
+        return self._grep(search_query, max_results=max_results or 10)
 
     # Backwards compatibility alias
     retrieve = search

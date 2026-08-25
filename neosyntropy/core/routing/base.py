@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from ..core.context import RunContext
-from ..core.models import Candidate, RoutingPlan
+from ..context import RunContext
+from ..models import Candidate, RoutingPlan
 
 
 class RouterError(RuntimeError):

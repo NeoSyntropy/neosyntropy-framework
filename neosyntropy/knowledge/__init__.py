@@ -4,8 +4,6 @@ from neosyntropy.knowledge.protocol import (
     KnowledgeProtocol,
     KnowledgeReasoningProtocol,
     KnowledgeTransformProtocol,
-    MultiVectorDbKnowledgeProtocol,
-    VectorDbKnowledgeProtocol,
 )
 
 from neosyntropy.knowledge.transform import transform, Input, Output
@@ -16,8 +14,6 @@ __all__ = [
     "KnowledgeProtocol",
     "KnowledgeTransformProtocol",
     "KnowledgeReasoningProtocol",
-    "VectorDbKnowledgeProtocol",
-    "MultiVectorDbKnowledgeProtocol",
     "transform",
     "Input",
     "Output",

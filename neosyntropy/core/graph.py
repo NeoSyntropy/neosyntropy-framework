@@ -58,9 +58,10 @@ def _resolve_routers(
     entry: Any,
 ) -> tuple[list[Any], set[str], list[Edge]]:
     """Collect router declarations (including nested) and compile edges."""
-    from ..routing.declarations import (
-        DeterministicRouter,
-        SemanticRouter,
+    from .routing.deterministic import DeterministicRouter
+    from .routing.semantic import SemanticRouter
+    from .routing.declarations import (
+        RouterDecl,
         collect_nested_routers,
         compile_routers,
     )
@@ -94,7 +95,8 @@ class FSMValidationError(ValueError):
 
 def _resolve_entry_id(entry: Any) -> str:
     """Return the state id for an authored entry (router, node, or id)."""
-    from ..routing.declarations import DeterministicRouter, SemanticRouter
+    from .routing.deterministic import DeterministicRouter
+    from .routing.semantic import SemanticRouter
 
     if isinstance(entry, (DeterministicRouter, SemanticRouter)):
         return entry.id
@@ -116,7 +118,8 @@ def _entry_contract(
     routers: dict[str, Any],
 ) -> tuple[dict[str, Any], type[BaseModel] | None]:
     """Derive the FSM entry input_schema from the entry node or router."""
-    from ..routing.declarations import DeterministicRouter, SemanticRouter
+    from .routing.deterministic import DeterministicRouter
+    from .routing.semantic import SemanticRouter
 
     if isinstance(entry, (DeterministicRouter, SemanticRouter)):
         schema = entry.json_schema
@@ -185,7 +188,8 @@ class FSM:
                 ["FSM requires entry= (a node or router with input_schema)"]
             )
 
-        from ..routing.declarations import DeterministicRouter, SemanticRouter
+        from .routing.deterministic import DeterministicRouter
+        from .routing.semantic import SemanticRouter
 
         self.groups: dict[str, Group] = {}
         resolved_groups: list[Group] = []
@@ -200,7 +204,7 @@ class FSM:
         for root in [*routers, entry]:
             if not isinstance(root, (DeterministicRouter, SemanticRouter)):
                 continue
-            from ..routing.declarations import collect_nested_routers
+            from .routing.declarations import collect_nested_routers
 
             for item in collect_nested_routers(root):
                 if not isinstance(item, SemanticRouter):

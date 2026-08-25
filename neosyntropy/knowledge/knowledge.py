@@ -13,9 +13,9 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from neosyntropy.knowledge.content import Content, ContentStatus
 from neosyntropy.knowledge.document import Document
 from neosyntropy.knowledge.protocol import (
+    KnowledgeProtocol,
     KnowledgeReasoningProtocol,
     KnowledgeTransformProtocol,
-    VectorDbKnowledgeProtocol,
 )
 from neosyntropy.knowledge.remote_content.base import BaseStorageConfig
 from neosyntropy.knowledge.remote_knowledge import RemoteKnowledge
@@ -23,7 +23,7 @@ from neosyntropy.utils.log import log_debug, log_warning
 from neosyntropy.utils.string import generate_id
 
 
-class Knowledge(RemoteKnowledge, KnowledgeTransformProtocol, VectorDbKnowledgeProtocol):
+class Knowledge(RemoteKnowledge, KnowledgeTransformProtocol, KnowledgeProtocol):
     """Unified Knowledge class representing a knowledge base.
 
     Can store and query data using vector databases, relational/NoSQL databases,

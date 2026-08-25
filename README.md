@@ -159,6 +159,9 @@ normal outcome — `result.rejected` is set and the audit explains why.
 More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) ·
 [`examples/refund_workflow.py`](examples/refund_workflow.py)
 
+Decorators that extract parameters into a Python function:
+[`cookbook/decorators`](cookbook/decorators) (`@function_calling`, `@workflow`).
+
 ## License
 
 NeoSyntropy Framework is licensed under the

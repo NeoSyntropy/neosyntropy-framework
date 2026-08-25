@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -789,3 +789,28 @@ def _wire_tool_catalog(tools: Any) -> list[dict[str, Any]]:
         }
         for spec in specs
     ]
+
+
+class _RouteClient(Protocol):
+    async def route(
+        self,
+        context: RunContext,
+        candidates: list[Candidate],
+        *,
+        category: str = "general",
+    ) -> RoutingPlan: ...
+
+
+class BackendSemanticRouter:
+    """Routes via the backend-owned semantic router service."""
+
+    def __init__(self, client: _RouteClient, *, category: str = "general") -> None:
+        self.client = client
+        self.category = category
+
+    async def route(
+        self, context: RunContext, candidates: list[Candidate]
+    ) -> RoutingPlan:
+        return await self.client.route(
+            context, candidates, category=self.category
+        )

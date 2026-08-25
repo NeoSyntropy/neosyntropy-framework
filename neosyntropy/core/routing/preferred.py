@@ -6,9 +6,9 @@ Authoring uses :class:`~neosyntropy.routing.DeterministicRouter` /
 """
 from __future__ import annotations
 
-from ..core.context import RunContext
-from ..core.graph import FSM
-from ..core.models import Candidate, RoutingPlan, Topology
+from ..context import RunContext
+from ..graph import FSM
+from ..models import Candidate, RoutingPlan, Topology
 from .base import RouterError
 
 

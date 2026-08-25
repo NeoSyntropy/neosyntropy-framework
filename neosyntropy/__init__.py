@@ -139,6 +139,7 @@ from .core.models import (
 
 )
 
+from .core.decorators import function_calling, workflow
 from .core.node import (
     COMBINE_SCHEMA_SUFFIX,
     REASONING_OUTPUT_SCHEMA,
@@ -150,6 +151,8 @@ from .core.node import (
     NodeKind,
     NodeMode,
     ReasoningNode,
+    ReasoningStep,
+    SchemaStep,
     SchemaNode,
     node,
     retrieval_node,
@@ -178,13 +181,14 @@ from .providers.base import Provider, ProviderRegistry
 
 from .providers.callable import CallableProvider
 
-from .routing.backend_route import BackendSemanticRouter
+from .backend import BackendSemanticRouter
 
-from .routing.base import Router, RouterError
+from .core.routing.base import Router, RouterError
 
-from .routing.declarations import DeterministicRouter, SemanticRouter
+from .core.routing.deterministic import DeterministicRouter
+from .core.routing.semantic import SemanticRouter
 
-from .routing.preferred import PreferredPathRouter
+from .core.routing.preferred import PreferredPathRouter
 
 from .tools.communication.calling import (
 
@@ -392,6 +396,10 @@ __all__ = [
 
     "ReasoningNode",
 
+    "ReasoningStep",
+
+    "SchemaStep",
+
     "SchemaNode",
 
     "TOOL_EVIDENCE_KEY",
@@ -459,6 +467,8 @@ __all__ = [
 
     "node",
     "retrieval_node",
+    "function_calling",
+    "workflow",
     "registered_tools",
     "input_model_schema",
     "strict_model_schema",

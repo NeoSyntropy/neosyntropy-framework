@@ -183,6 +183,10 @@ class Node(BaseModel):
             raise ValueError(f"node {self.id!r} requires output_schema")
         return self
 
+    def compile(self) -> tuple[list[Node], list[Edge]]:
+        """Compile into base execution primitives. Returns ([self], [])."""
+        return ([self], [])
+
     def input_error(self, payload: Mapping[str, Any]) -> str | None:
         """Return why ``payload`` fails this node's declared input_schema, or None.
 
@@ -260,6 +264,7 @@ def SchemaNode(
     if func is not None:
         if resolved_output_schema is None:
             import typing
+            from pydantic import create_model
             hints = typing.get_type_hints(func)
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
@@ -267,10 +272,16 @@ def SchemaNode(
                 raise ValueError(f"Function {func.__name__} must take at least one parameter to derive output_schema.")
             
             first_param_name = params[0]
-            if first_param_name not in hints:
-                raise ValueError(f"Function {func.__name__} parameter '{first_param_name}' must have a type hint (e.g. a BaseModel).")
-            
-            resolved_output_schema = hints[first_param_name]
+            first_param_type = hints.get(first_param_name)
+            if first_param_type is not None and _is_model_type(first_param_type):
+                resolved_output_schema = first_param_type
+            else:
+                fields: dict[str, Any] = {}
+                for p_name, param in sig.parameters.items():
+                    p_type = hints.get(p_name, Any)
+                    default_val = param.default if param.default is not inspect.Parameter.empty else ...
+                    fields[p_name] = (p_type, default_val)
+                resolved_output_schema = create_model(f"{func.__name__}_OutputModel", **fields)
 
     if resolved_output_schema is None:
         raise ValueError(f"SchemaNode {id!r} requires either output_schema or func with typed parameters")
@@ -312,6 +323,16 @@ class ReasoningStep:
     def __post_init__(self):
         if len(self.tools) > self.max_tools:
             raise ValueError(f"ReasoningStep cannot have more than {self.max_tools} tools.")
+
+
+@dataclass
+class SchemaStep:
+    """The final parameter extraction step of a workflow.
+
+    Attributes:
+        instruction: Optional prompt guiding the parameter extraction.
+    """
+    instruction: str | None = None
 
 
 def ReasoningNode(

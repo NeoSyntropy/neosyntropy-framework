@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from neosyntropy import FSM, OpenInput, SchemaNode
 from neosyntropy.benchmark.synthesizer import FSMSynthesizer
-from neosyntropy.routing.declarations import SemanticRouter
+from neosyntropy.core.routing.semantic import SemanticRouter
 
 
 class MockProvider:
@@ -48,7 +48,7 @@ def test_synthesize_entry_cases():
     provider = MockProvider(fixed_response=mock_payload)
     
     # Synthesize cases
-    synthesizer = FSMSynthesizer(fsm=fsm, provider=provider)
+    synthesizer = FSMSynthesizer(fsm=fsm, client=provider)
     dataset = asyncio.run(synthesizer.synthesize_entry_cases(samples_per_edge=2))
     
     assert len(dataset.router_cases) == 4  # 2 routes * 2 samples

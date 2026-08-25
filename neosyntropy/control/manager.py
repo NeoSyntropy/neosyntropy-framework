@@ -51,9 +51,9 @@ from ..monitor.graph.manifest import (
     graph_manifest,
 )
 from ..providers.base import Provider, ProviderRegistry
-from ..routing.backend_route import BackendSemanticRouter
-from ..routing.base import Router
-from ..routing.preferred import PreferredPathRouter
+from ..backend import BackendSemanticRouter
+from ..core.routing.base import Router
+from ..core.routing.preferred import PreferredPathRouter
 
 from ..tools.core.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor

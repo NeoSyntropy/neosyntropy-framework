@@ -19,7 +19,7 @@ from neosyntropy import (
     edge_deterministic,
     tool,
 )
-from neosyntropy.routing.declarations import SemanticRouter
+from neosyntropy.core.routing.semantic import SemanticRouter
 
 ROUTER_PROVIDER = "neosyntropy/base"
 VERTEX_MODEL = "glm-5-maas"
