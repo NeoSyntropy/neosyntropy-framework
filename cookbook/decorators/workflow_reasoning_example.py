@@ -3,6 +3,8 @@
 Two ReasoningSteps gather catalog and stock evidence. The trailing SchemaNode
 predicts typed parameters and calls place_order().
 
+Creates a dedicated project, then runs against the local API (port 8000).
+
 Run::
 
     python cookbook/decorators/workflow_reasoning_example.py
@@ -11,6 +13,8 @@ Run::
 from __future__ import annotations
 
 import os
+import sys
+import time
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -25,6 +29,7 @@ from neosyntropy import (
 )
 
 TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
+DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 CATALOG = {
     "laptop": {"sku": "sku_laptop_pro", "name": "Laptop Pro"},
@@ -62,6 +67,27 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _client_for_example() -> Client:
+    _load_tests_env()
+    client = Client(
+        api_key=_require_env("NEOSYNTROPY_API_KEY"),
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
+        or DEFAULT_API_URL,
+    )
+    stamp = int(time.time())
+    project = client.create_project(
+        "Cookbook workflow reasoning",
+        f"cookbook-workflow-reasoning-{stamp}",
+        description="Live cookbook run for @workflow",
+    )
+    print(f"project: {project.get('name')} ({project.get('id')})")
+    return client
+
+
+def _provider() -> str:
+    return os.environ.get("NEOSYNTROPY_PROVIDER", "neosyntropy/base").strip() or "neosyntropy/base"
+
+
 class UserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str
@@ -85,13 +111,7 @@ class OrderParams(BaseModel):
 
 
 def main() -> None:
-    _load_tests_env()
-    client = Client(
-        api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        project_id=_require_env("NEOSYNTROPY_PROJECT_ID"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", "https://api.neosyntropy.com").strip()
-        or "https://api.neosyntropy.com",
-    )
+    client = _client_for_example()
     registry = ToolRegistry()
 
     @tool(registry=registry)
@@ -132,6 +152,7 @@ def main() -> None:
         ],
         client=client,
         tools=registry,
+        provider=_provider(),
     )
     def place_order(params: OrderParams) -> str:
         available = STOCK.get(params.sku, {}).get("available", 0)
@@ -145,6 +166,7 @@ def main() -> None:
         )
 
     result = place_order(text="We need 3 laptops for the sales team")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(result)
 
 

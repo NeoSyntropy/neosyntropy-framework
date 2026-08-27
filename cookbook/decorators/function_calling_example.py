@@ -1,5 +1,7 @@
 """Simple @function_calling: extract parameters, then run the function.
 
+Creates a dedicated project, then runs against the local API (port 8000).
+
 Run::
 
     python cookbook/decorators/function_calling_example.py
@@ -8,6 +10,8 @@ Run::
 from __future__ import annotations
 
 import os
+import sys
+import time
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -15,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from neosyntropy import Client, function_calling
 
 TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
+DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 
 def _load_tests_env() -> None:
@@ -40,6 +45,27 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _client_for_example() -> Client:
+    _load_tests_env()
+    client = Client(
+        api_key=_require_env("NEOSYNTROPY_API_KEY"),
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
+        or DEFAULT_API_URL,
+    )
+    stamp = int(time.time())
+    project = client.create_project(
+        "Cookbook function calling",
+        f"cookbook-function-calling-{stamp}",
+        description="Live cookbook run for @function_calling",
+    )
+    print(f"project: {project.get('name')} ({project.get('id')})")
+    return client
+
+
+def _provider() -> str:
+    return os.environ.get("NEOSYNTROPY_PROVIDER", "neosyntropy/base").strip() or "neosyntropy/base"
+
+
 class UserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str
@@ -54,13 +80,7 @@ class GreetParams(BaseModel):
 
 
 def main() -> None:
-    _load_tests_env()
-    client = Client(
-        api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        project_id=_require_env("NEOSYNTROPY_PROJECT_ID"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", "https://api.neosyntropy.com").strip()
-        or "https://api.neosyntropy.com",
-    )
+    client = _client_for_example()
 
     hellos = {"en": "Hello", "es": "Hola", "fr": "Bonjour"}
 
@@ -71,12 +91,14 @@ def main() -> None:
         ),
         input_schema=UserRequest,
         client=client,
+        provider=_provider(),
     )
     def greet(params: GreetParams) -> str:
         hello = hellos.get(params.language.lower(), "Hello")
         return f"{hello}, {params.name}!"
 
     result = greet(text="Please greet María in Spanish")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(result) 
 
 

@@ -9,7 +9,11 @@ typed parameters; your function runs with those values.
 | `@workflow` | Reasoning steps call tools first, then extract parameters. |
 
 Credentials: copy [`tests/.env.example`](../../tests/.env.example) to
-`tests/.env` (or set the same variables in the environment).
+`tests/.env` and set `NEOSYNTROPY_API_KEY`. Each example creates its own
+project on the local API (`http://127.0.0.1:8000` by default). Override
+`NEOSYNTROPY_API_URL` only if you are not using the local server. Set
+`NEOSYNTROPY_PROVIDER` (for example `gemini-2.5-flash`) when the local
+GPU inference service is not available.
 
 ```bash
 python cookbook/decorators/function_calling_example.py
@@ -42,7 +46,12 @@ evidence, a `SchemaNode` predicts the function parameters.
     steps=[
         ReasoningStep("Identify the product SKU.", tools=["lookup_sku"]),
         ReasoningStep("Check warehouse stock.", tools=["check_stock"]),
-        SchemaStep(),
+        SchemaStep(
+            instruction=(
+                "Using the catalog and stock tool results, extract sku, quantity, "
+                "and warehouse for the customer's order. Quantity comes from the request."
+            )
+        ),
     ],
     client=client,
     tools=registry,
