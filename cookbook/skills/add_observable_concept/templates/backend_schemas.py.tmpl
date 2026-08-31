@@ -1,0 +1,32 @@
+"""Wire schemas for the {CONCEPT} API."""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class _WireModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class {CONCEPT_LABEL}Create(_WireModel):
+    """Payload sent by ``BackendClient.register_concept('{CONCEPT}', manifest)``."""
+
+    manifest: dict[str, Any] = Field(default_factory=dict)
+
+
+class {CONCEPT_LABEL}Out(BaseModel):
+    """Response shape returned to the frontend console and SDK callers."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    {CONCEPT_NATURAL_KEY}: str
+    description: str | None = None
+    manifest: dict[str, Any] | None = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

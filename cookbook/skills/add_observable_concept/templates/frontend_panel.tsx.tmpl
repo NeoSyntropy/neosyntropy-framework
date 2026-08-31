@@ -1,0 +1,90 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { consoleFetch, type Project } from "@/app/components/console/ConsoleClient";
+
+type {CONCEPT_LABEL}Item = {
+  id: string;
+  project_id: string;
+  {CONCEPT_NATURAL_KEY}: string;
+  description?: string | null;
+  manifest?: Record<string, unknown> | null;
+  first_seen_at?: string;
+  last_seen_at?: string;
+};
+
+type Props = { projectId: string; project: Project | null };
+
+export default function {CONCEPT_LABEL}Panel({ projectId }: Props) {
+  const [items, setItems] = useState<{CONCEPT_LABEL}Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    consoleFetch<{CONCEPT_LABEL}Item[]>(
+      `projects/${encodeURIComponent(projectId)}/{URL_SLUG}`,
+    )
+      .then((data) => setItems(Array.isArray(data) ? data : []))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Failed to load {CONCEPT}s."),
+      )
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  if (loading) {
+    return <div className="console-loading">Loading {CONCEPT}s…</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="console-section">
+        <p style={{ color: "var(--color-error, #dc2626)" }}>{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <section className="console-section">
+      <div className="console-section-head">
+        <div>
+          <p>{CONCEPT_DESCRIPTION}</p>
+          <h2>{CONCEPT_TAB_LABEL}</h2>
+        </div>
+        <span>{items.length} registered</span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="console-graph-list-empty">
+          No {CONCEPT}s registered yet.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {items.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                border: "1px solid var(--color-border, #e5e7eb)",
+                borderRadius: 8,
+                padding: "14px 18px",
+              }}
+            >
+              <strong>{item.{CONCEPT_NATURAL_KEY}}</strong>
+              {item.description && (
+                <p style={{ fontSize: 13, marginTop: 4, color: "var(--color-text-muted, #6b7280)" }}>
+                  {item.description}
+                </p>
+              )}
+              {item.last_seen_at && (
+                <p style={{ fontSize: 11, marginTop: 6, color: "var(--color-text-muted, #9ca3af)" }}>
+                  Last seen: {new Date(item.last_seen_at).toLocaleString()}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}

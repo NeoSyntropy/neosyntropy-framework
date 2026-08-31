@@ -1,0 +1,27 @@
+"""{CONCEPT_LABEL} manifest generator for UI visualisation and telemetry."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    pass  # import your {CONCEPT_LABEL} class here, e.g.:
+    # from neosyntropy.{CONCEPT}.{CONCEPT} import {CONCEPT_LABEL}
+
+
+def {CONCEPT}_manifest(obj: Any) -> dict[str, Any]:
+    """Return the serialisable description of a {CONCEPT_LABEL} instance.
+
+    This is the canonical definition of what gets sent to the server when a
+    {CONCEPT_LABEL} object is registered.  The structure is stored as
+    ``{CONCEPT_LABEL}.manifest`` on the backend.
+
+    ``schema_version`` must be incremented if the shape changes in a
+    breaking way (new required fields, removed fields, renamed fields).
+    """
+    return {
+        "schema_version": 1,
+        "name": getattr(obj, "name", None) or obj.__class__.__name__,
+        "description": getattr(obj, "description", None),
+        # --- add every concept-specific field below ---
+        # example: "topics": getattr(obj, "topics", []),
+    }

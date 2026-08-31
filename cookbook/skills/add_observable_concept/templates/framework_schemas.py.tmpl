@@ -1,0 +1,29 @@
+"""Pydantic wire schemas for the {CONCEPT} monitor layer."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel
+
+
+class {CONCEPT_LABEL}Manifest(BaseModel):
+    """Wire shape stored as {CONCEPT_LABEL}.manifest on the backend.
+
+    Fields here must mirror the keys returned by ``{CONCEPT}_manifest()``
+    in ``manifest.py``.  Add concept-specific fields below the base ones.
+    """
+
+    schema_version: int = 1
+    name: str
+    description: Optional[str] = None
+    # --- add every manifest field here, matching manifest.py ---
+
+
+class {CONCEPT_LABEL}Event(BaseModel):
+    """Lifecycle event for a {CONCEPT} instance."""
+
+    {CONCEPT_NATURAL_KEY}: str
+    event_type: str
+    timestamp: datetime
+    metadata: Optional[Dict[str, Any]] = None

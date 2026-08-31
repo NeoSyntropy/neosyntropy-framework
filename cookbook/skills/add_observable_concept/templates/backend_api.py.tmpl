@@ -1,0 +1,74 @@
+"""{CONCEPT_LABEL} API — registers and lists {CONCEPT} manifests per project."""
+from __future__ import annotations
+
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.db import get_session
+from src.models.auth import User
+from src.operations.{CONCEPT} import get_{CONCEPT}, list_{CONCEPT}s, upsert_{CONCEPT}
+from src.operations.observability import (
+    ApiKeyPrincipal,
+    owned_project,
+    require_scope,
+    session_or_workspace_user,
+)
+from src.schemas.{CONCEPT} import {CONCEPT_LABEL}Create, {CONCEPT_LABEL}Out
+
+router = APIRouter(prefix="/observability", tags=["{CONCEPT}"])
+
+
+# -- Console (session-auth) read endpoints ------------------------------------
+
+@router.get(
+    "/projects/{project_id}/{URL_SLUG}",
+    response_model=list[{CONCEPT_LABEL}Out],
+)
+async def list_project_{CONCEPT}s(
+    project_id: uuid.UUID,
+    user: Annotated[User, Depends(session_or_workspace_user)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> list[{CONCEPT_LABEL}Out]:
+    project = await owned_project(db, user.id, project_id)
+    rows = await list_{CONCEPT}s(db, project.id)
+    return [{CONCEPT_LABEL}Out.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/projects/{project_id}/{URL_SLUG}/{concept_id}",
+    response_model={CONCEPT_LABEL}Out,
+)
+async def get_project_{CONCEPT}(
+    project_id: uuid.UUID,
+    concept_id: uuid.UUID,
+    user: Annotated[User, Depends(session_or_workspace_user)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> {CONCEPT_LABEL}Out:
+    project = await owned_project(db, user.id, project_id)
+    row = await get_{CONCEPT}(db, project.id, concept_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "{CONCEPT_LABEL} not found")
+    return {CONCEPT_LABEL}Out.model_validate(row)
+
+
+# -- SDK telemetry (API-key) — called by BackendClient.register_concept -------
+
+@router.post(
+    "/projects/{project_id}/{URL_SLUG}",
+    response_model={CONCEPT_LABEL}Out,
+    status_code=status.HTTP_200_OK,  # 200 because this is an upsert, not a pure create
+)
+async def register_{CONCEPT}(
+    project_id: uuid.UUID,
+    body: {CONCEPT_LABEL}Create,
+    principal: Annotated[ApiKeyPrincipal, Depends(require_scope("telemetry:write"))],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> {CONCEPT_LABEL}Out:
+    if principal.key.project_id is not None and principal.key.project_id != project_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key not scoped to this project")
+    row = await upsert_{CONCEPT}(db, project_id=project_id, manifest=body.manifest)
+    await db.commit()
+    return {CONCEPT_LABEL}Out.model_validate(row)

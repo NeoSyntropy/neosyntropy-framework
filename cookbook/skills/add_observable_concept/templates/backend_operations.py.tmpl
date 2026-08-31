@@ -1,0 +1,83 @@
+"""Business logic for {CONCEPT} registration and retrieval.
+
+No router or API layer imports here — pure database operations only.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.{CONCEPT} import {CONCEPT_LABEL}
+
+
+async def upsert_{CONCEPT}(
+    db: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    manifest: dict[str, Any],
+) -> {CONCEPT_LABEL}:
+    """Upsert a {CONCEPT} record keyed on (project_id, {CONCEPT_NATURAL_KEY}).
+
+    On re-registration the manifest and description are refreshed and
+    ``last_seen_at`` is bumped to now.
+    """
+    natural_key: str = manifest.get("{CONCEPT_NATURAL_KEY}") or "unnamed"
+    description: str | None = manifest.get("description")
+
+    existing = await db.scalar(
+        select({CONCEPT_LABEL}).where(
+            {CONCEPT_LABEL}.project_id == project_id,
+            {CONCEPT_LABEL}.{CONCEPT_NATURAL_KEY} == natural_key,
+        )
+    )
+
+    if existing is not None:
+        existing.manifest = manifest
+        if description is not None:
+            existing.description = description
+        existing.last_seen_at = datetime.now(UTC)
+        await db.flush()
+        return existing
+
+    obj = {CONCEPT_LABEL}(
+        project_id=project_id,
+        {CONCEPT_NATURAL_KEY}=natural_key,
+        description=description,
+        manifest=manifest,
+    )
+    db.add(obj)
+    await db.flush()
+    return obj
+
+
+async def list_{CONCEPT}s(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+) -> list[{CONCEPT_LABEL}]:
+    """Return all {CONCEPT}s for a project, newest first."""
+    rows = (
+        await db.scalars(
+            select({CONCEPT_LABEL})
+            .where({CONCEPT_LABEL}.project_id == project_id)
+            .order_by({CONCEPT_LABEL}.last_seen_at.desc())
+        )
+    ).all()
+    return list(rows)
+
+
+async def get_{CONCEPT}(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    {CONCEPT}_id: uuid.UUID,
+) -> {CONCEPT_LABEL} | None:
+    """Fetch a single {CONCEPT} by project + id, or ``None`` if not found."""
+    return await db.scalar(
+        select({CONCEPT_LABEL}).where(
+            {CONCEPT_LABEL}.project_id == project_id,
+            {CONCEPT_LABEL}.id == {CONCEPT}_id,
+        )
+    )

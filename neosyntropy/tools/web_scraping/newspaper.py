@@ -1,0 +1,51 @@
+from neosyntropy.tools.core.toolkit import Toolkit
+import logging
+logger = logging.getLogger(__name__)
+log_debug = logger.debug
+log_error = logger.error
+log_warning = logger.warning
+log_info = logger.info
+
+try:
+    from newspaper import Article
+except ImportError:
+    raise ImportError("`newspaper3k` not installed. Please run `pip install newspaper3k lxml_html_clean`.")
+
+
+class NewspaperTools(Toolkit):
+    """
+    Newspaper is a tool for getting the text of an article from a URL.
+    Args:
+        get_article_text (bool): Whether to get the text of an article from a URL.
+    """
+
+    def __init__(
+        self,
+        enable_get_article_text: bool = True,
+        all: bool = False,
+        **kwargs,
+    ):
+        tools = []
+        if all or enable_get_article_text:
+            tools.append(self.get_article_text)
+
+        super().__init__(name="newspaper_toolkit", tools=tools, **kwargs)
+
+    def get_article_text(self, url: str) -> str:
+        """Get the text of an article from a URL.
+
+        Args:
+            url (str): The URL of the article.
+
+        Returns:
+            str: The text of the article.
+        """
+
+        try:
+            log_debug(f"Reading news: {url}")
+            article = Article(url)
+            article.download()
+            article.parse()
+            return article.text
+        except Exception as e:
+            return f"Error getting article text from {url}: {e}"

@@ -1,0 +1,36 @@
+"""Observer that sends {CONCEPT} lifecycle events to the backend."""
+from __future__ import annotations
+
+from neosyntropy.monitor.base import BackendConceptReporter
+from neosyntropy.monitor.{CONCEPT}.manifest import {CONCEPT}_manifest
+
+
+class {CONCEPT_LABEL}Observer:
+    """Sends {CONCEPT} lifecycle events to the backend via BackendConceptReporter.
+
+    Replaces the bare ``MonitorObserver`` stub so events actually reach the
+    server.  Instantiate with a ``BackendConceptReporter`` that is already
+    bound to the correct project.
+
+    Usage::
+
+        reporter = BackendConceptReporter(client, project_id="proj_abc")
+        observer = {CONCEPT_LABEL}Observer(reporter)
+        concept_id = await observer.registered(my_{CONCEPT}_obj)
+    """
+
+    def __init__(self, reporter: BackendConceptReporter) -> None:
+        self._reporter = reporter
+
+    async def registered(self, obj: object) -> str | None:
+        """Call at the point the {CONCEPT} object is constructed / registered.
+
+        Returns the server-assigned concept id, or ``None`` on failure.
+        """
+        return await self._reporter.concept_registered(
+            "{CONCEPT}", {CONCEPT}_manifest(obj)
+        )
+
+    async def event(self, concept_id: str, event_type: str, payload: dict) -> None:
+        """Record a lifecycle event for a previously registered {CONCEPT}."""
+        await self._reporter.event(concept_id, event_type, payload)
