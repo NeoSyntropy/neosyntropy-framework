@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Your code should control AI — not an agent controlling your code.</strong>
 </p>
-Agent frameworks leave three problems unsolved:
+Agent frameworks leave two problems unsolved:
 
 1. **High unit cost and uncontrolled token spend** — you pay for tokens, retries, and unnecessary reasoning instead of paying for a successful business outcome; every step can re-read context, trigger self-correction loops, and consume more tokens, while finance only sees the cost after the fact.
 
