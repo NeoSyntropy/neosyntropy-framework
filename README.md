@@ -9,11 +9,16 @@
 </p>
 Agent frameworks leave three problems unsolved:
 
-1. **Hallucinations** — models can invent steps, facts, and transitions that were never approved.
+1. **High unit cost and uncontrolled token spend** — you pay for tokens, retries, and unnecessary reasoning instead of paying for a successful business outcome; every step can re-read context, trigger self-correction loops, and consume more tokens, while finance only sees the cost after the fact.
 
-2. **High unit cost** — you pay for tokens, retries, and unnecessary reasoning instead of paying for a successful business outcome.
+2. **Hallucinations** — models can invent steps, facts, and transitions that were never approved.
 
-3. **Uncontrolled token spend** — every step can re-read context, trigger self-correction loops, and consume more tokens, while finance only sees the cost after the fact.
+
+| | Process Unit Cost | Full Workflow Accuracy |
+|---|---|---|
+| **Before** — [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High — pays per token, retry, and reasoning step regardless of outcome | Unpredictable — hallucinated steps and uncontrolled loops degrade end-to-end reliability |
+| **After** — NeoSyntropy (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
+
 
 ## The problem is not always the model. It is the execution loop.
 
