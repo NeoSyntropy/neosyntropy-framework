@@ -92,7 +92,7 @@ class BaseLoader:
             file_type=file_type,
         )
         entry.content_hash = self._build_content_hash(entry)  # type: ignore[attr-defined]
-        entry.id = generate_id(entry.content_hash)
+        entry.id = entry.content_hash or generate_id()
         return entry
 
     def _update_content_entry_for_single_file(

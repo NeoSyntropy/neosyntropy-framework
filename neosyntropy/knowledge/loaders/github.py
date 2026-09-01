@@ -370,7 +370,7 @@ class GitHubLoader(BaseLoader):
 
         files_to_process: List[Dict[str, str]] = []
 
-        async with AsyncClient() as client:
+        async with AsyncClient(follow_redirects=True) as client:
             # Helper function to recursively list all files in a folder
             async def list_files_recursive(folder: str) -> List[Dict[str, str]]:
                 """Recursively list all files in a GitHub folder."""
@@ -398,7 +398,22 @@ class GitHubLoader(BaseLoader):
 
                 return files
 
-            if path_to_process:
+            # When path_to_process is empty we want the repo root.  Use the
+            # Git Trees API with recursive=1 for a single-request full listing.
+            if not path_to_process:
+                trees_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
+                try:
+                    response = await client.get(trees_url, headers=headers, timeout=30.0)
+                    response.raise_for_status()
+                    tree_data = response.json()
+                    for item in tree_data.get("tree", []):
+                        if item.get("type") == "blob":
+                            item_path = item["path"]
+                            files_to_process.append({"path": item_path, "name": item_path.split("/")[-1]})
+                except Exception as e:
+                    log_error(f"Error listing root tree for {repo}@{branch}: {str(e)}")
+                    return
+            else:
                 api_url = f"https://api.github.com/repos/{repo}/contents/{path_to_process}"
                 if branch:
                     api_url += f"?ref={branch}"
@@ -449,7 +464,7 @@ class GitHubLoader(BaseLoader):
 
                 await self._ainsert_contents_db(content_entry)
 
-                if self._should_skip(content_entry.content_hash, skip_if_exists):
+                if self._should_skip(content_entry, upsert, skip_if_exists):
                     content_entry.status = ContentStatus.COMPLETED
                     await self._aupdate_content(content_entry)
                     continue
@@ -483,11 +498,18 @@ class GitHubLoader(BaseLoader):
                 readable_content = BytesIO(file_content)
                 read_documents = await reader.async_read(readable_content, name=file_name)
 
-                # Prepare and insert into vector database
+                # Prepare documents, then insert into vector DB when one is configured;
+                # otherwise fall back to storing raw Document objects in self.contents
+                # so that Knowledge.search() can do keyword matching without a vector DB.
                 if not content_entry.id:
-                    content_entry.id = generate_id(content_entry.content_hash or "")
+                    content_entry.id = content_entry.content_hash or generate_id()
                 self._prepare_documents_for_insert(read_documents, content_entry.id)
-                await self._ahandle_vector_db_insert(content_entry, read_documents, upsert)
+                if self.vector_dbs:
+                    await self._ahandle_vector_db_insert(content_entry, read_documents, upsert)
+                else:
+                    self.contents.extend(read_documents)
+                content_entry.status = ContentStatus.COMPLETED
+                await self._aupdate_content(content_entry)
 
     def _load_from_github(
         self,
@@ -526,7 +548,7 @@ class GitHubLoader(BaseLoader):
 
         files_to_process: List[Dict[str, str]] = []
 
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             # Helper function to recursively list all files in a folder
             def list_files_recursive(folder: str) -> List[Dict[str, str]]:
                 """Recursively list all files in a GitHub folder."""
@@ -554,7 +576,22 @@ class GitHubLoader(BaseLoader):
 
                 return files
 
-            if path_to_process:
+            # When path_to_process is empty we want the repo root.  Use the
+            # Git Trees API with recursive=1 for a single-request full listing.
+            if not path_to_process:
+                trees_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
+                try:
+                    response = client.get(trees_url, headers=headers, timeout=30.0)
+                    response.raise_for_status()
+                    tree_data = response.json()
+                    for item in tree_data.get("tree", []):
+                        if item.get("type") == "blob":
+                            item_path = item["path"]
+                            files_to_process.append({"path": item_path, "name": item_path.split("/")[-1]})
+                except Exception as e:
+                    log_error(f"Error listing root tree for {repo}@{branch}: {str(e)}")
+                    return
+            else:
                 api_url = f"https://api.github.com/repos/{repo}/contents/{path_to_process}"
                 if branch:
                     api_url += f"?ref={branch}"
@@ -605,7 +642,7 @@ class GitHubLoader(BaseLoader):
 
                 self._insert_contents_db(content_entry)
 
-                if self._should_skip(content_entry.content_hash, skip_if_exists):
+                if self._should_skip(content_entry, upsert, skip_if_exists):
                     content_entry.status = ContentStatus.COMPLETED
                     self._update_content(content_entry)
                     continue
@@ -639,8 +676,15 @@ class GitHubLoader(BaseLoader):
                 readable_content = BytesIO(file_content)
                 read_documents = reader.read(readable_content, name=file_name)
 
-                # Prepare and insert into vector database
+                # Prepare documents, then insert into vector DB when one is configured;
+                # otherwise fall back to storing raw Document objects in self.contents
+                # so that Knowledge.search() can do keyword matching without a vector DB.
                 if not content_entry.id:
-                    content_entry.id = generate_id(content_entry.content_hash or "")
+                    content_entry.id = content_entry.content_hash or generate_id()
                 self._prepare_documents_for_insert(read_documents, content_entry.id)
-                self._handle_vector_db_insert(content_entry, read_documents, upsert)
+                if self.vector_dbs:
+                    self._handle_vector_db_insert(content_entry, read_documents, upsert)
+                else:
+                    self.contents.extend(read_documents)
+                content_entry.status = ContentStatus.COMPLETED
+                self._update_content(content_entry)
