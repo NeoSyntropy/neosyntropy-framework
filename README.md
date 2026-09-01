@@ -17,7 +17,7 @@ Agent frameworks leave two problems unsolved:
 | | Process Unit Cost | Full Workflow Accuracy |
 |---|---|---|
 | **Before** — [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High — pays per token, retry, and reasoning step regardless of outcome | Unpredictable — hallucinated steps and uncontrolled loops degrade end-to-end reliability |
-| **After** — NeoSyntropy (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
+| **After** — [NeoSyntropy](https://github.com/NeoSyntropy/neosyntropy-framework) (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
 
 
 ## The problem is not always the model. It is the execution loop.
@@ -102,6 +102,7 @@ router, and a `Group` when the operation needs multiple controlled steps.
 | Router | [`semantic`](cookbook/fsm/semantic_router_sequential_example.py) — model picks among labeled targets, still validated against the graph. [`deterministic`](docs/concepts-explained.md#7-deterministicrouter--hard-rules) — first matching `(predicate, target)` rule wins |
 | [`Group`](docs/concepts-explained.md#9-group--named-subgraph-optional) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
 | [`Validation`](cookbook/validation) | Gate any FSM level: validate a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/validation/node_validation_example.py) · [`group`](cookbook/validation/group_path_validation_example.py) · [`fsm`](cookbook/validation/fsm_path_validation_example.py) |
+| [`KPI`](cookbook/kpi) | Score any FSM level without gating the run: a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/kpi/node_kpi_example.py) · [`fsm`](cookbook/kpi/fsm_path_kpi_example.py) |
 
 Each concept explained (what / when / example):
 [`docs/concepts-explained.md`](docs/concepts-explained.md) ·

@@ -38,3 +38,26 @@ class ValidationResult(BaseModel):
 
     valid: bool
     reason: str = ""
+
+
+class KpiResult(BaseModel):
+    """Standard output contract for all KPI nodes.
+
+    KPI nodes **never** fail the run — they score it.  If a threshold gate is
+    needed, place a :func:`~neosyntropy.core.validation.node.functional_validation_node`
+    after the KPI node and branch on ``state["valid"]``.
+
+    The ``valid`` field intentionally does not exist on this model: that key
+    belongs to validation edges and must not bleed into KPI semantics.
+
+    Attributes:
+        name:   Developer-given metric name (e.g. ``"completeness"``).
+                Written as the key in the accumulated ``state["kpis"]`` dict.
+        score:  Numeric measurement.  Typically ``0.0``–``1.0`` but the range
+                is not enforced by the schema.
+        reason: Human-readable explanation.  Empty string when omitted.
+    """
+
+    name: str
+    score: float
+    reason: str = ""
