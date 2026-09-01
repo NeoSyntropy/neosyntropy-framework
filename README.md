@@ -19,6 +19,7 @@ Agent frameworks leave two problems unsolved:
 | **Before** — [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High — pays per token, retry, and reasoning step regardless of outcome | Unpredictable — hallucinated steps and uncontrolled loops degrade end-to-end reliability |
 | **After** — [NeoSyntropy](https://github.com/NeoSyntropy/neosyntropy-framework) (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
 
+**Launch offer:** The first 10,000 users to [sign up](https://neosyntropy.com) receive **10,000 free state transitions**.
 
 ## The problem is not always the model. It is the execution loop.
 
