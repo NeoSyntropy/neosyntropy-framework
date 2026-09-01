@@ -75,33 +75,31 @@ class KnowledgeTransformProtocol(Protocol):
         ...
        
 @runtime_checkable
-class KnowledgeReasoningProtocol(Protocol):
-    """Protocol for knowledge retrieval and reasoning.
-    
-    This acts as a retrieval node interface that helps developers build an FSM 
-    specifically for reasoning over knowledge. It takes the heavy lifting of 
-    retrieval and tools away from the main fsm.
+class KnowledgeRetrievalProtocol(Protocol):
+    """Protocol for knowledge retrieval.
+
+    This acts as a retrieval node interface that helps developers build an FSM
+    specifically for searching and retrieving from a knowledge base. It takes
+    the heavy lifting of retrieval away from the main FSM.
     """
 
-    def build_reasoning_fsm(self, knowledge: KnowledgeProtocol, **kwargs) -> Any:
-        """Build and return a knowledge distillation/reasoning FSM.
-        
-        This workflow is executed to distill information, execute schema steps, 
-        and perform reasoning before returning the final context to the user or agent.
+    def build_retrieval_fsm(self, knowledge: KnowledgeProtocol, **kwargs) -> Any:
+        """Build and return a knowledge retrieval FSM.
+
+        This workflow is executed to retrieve, distill, and execute schema steps
+        before returning the final context to the caller.
         """
         ...
 
     def search(self, knowledge: KnowledgeProtocol, **kwargs: Any) -> Any:
-        """Search the knowledge base or run reasoning over it.
-        
-        This handles search logic and uses `build_reasoning_workflow()` to process,
-        distill, and execute reasoning. The input query/input schema is passed via kwargs.
+        """Search the knowledge base and return relevant documents.
+
+        Retrieves chunks that match the query and passes them to the retrieval
+        FSM for classification or further processing.
         """
         ...
-        
+
     async def asearch(self, knowledge: KnowledgeProtocol, **kwargs: Any) -> Any:
-        """Async version of search, using `build_reasoning_workflow()` for reasoning."""
+        """Async version of search."""
         ...
-
-
 

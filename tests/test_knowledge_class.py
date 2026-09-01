@@ -5,7 +5,6 @@ import pytest
 from neosyntropy.knowledge import (
     Knowledge,
     KnowledgeProtocol,
-    KnowledgeReasoningProtocol,
     KnowledgeTransformProtocol,
 )
 from neosyntropy.knowledge.document import Document

@@ -85,37 +85,37 @@ def test_retrieval_node_format_as_string():
 
 
 def test_retrieval_node_with_knowledge_protocol():
-    """Test retrieval_node using KnowledgeReasoningProtocol."""
-    from neosyntropy.knowledge.protocol import KnowledgeReasoningProtocol
+    """Test retrieval_node using KnowledgeRetrievalProtocol."""
+    from neosyntropy.knowledge.protocol import KnowledgeRetrievalProtocol
     
     class MockKnowledge:
-        def build_reasoning_workflow(self, **kwargs):
-            return "reasoning_fsm"
+        def build_retrieval_fsm(self, knowledge=None, **kwargs):
+            return "retrieval_fsm"
             
         def search(self, query: str, limit: int = 5, **kwargs):
-            wf = self.build_reasoning_workflow(**kwargs)
-            return [Document(id="k1", content=f"Researched '{query}' via {wf}", meta_data={"source": "reasoning"})]
+            wf = self.build_retrieval_fsm(**kwargs)
+            return [Document(id="k1", content=f"Retrieved '{query}' via {wf}", meta_data={"source": "knowledge"})]
             
         async def asearch(self, query: str, **kwargs):
             return self.search(query, **kwargs)
 
     knowledge_inst = MockKnowledge()
-    assert isinstance(knowledge_inst, KnowledgeReasoningProtocol)
+    assert isinstance(knowledge_inst, KnowledgeRetrievalProtocol)
     
     node = retrieval_node(
-        id="ReasoningFetch",
+        id="RetrievalFetch",
         knowledge=knowledge_inst,
         query_key="user_query",
-        output_key="reasoned_context",
+        output_key="retrieved_context",
         limit=3
     )
 
     result = node.handler({"user_query": "syntropy dynamics"})
     assert result.status == "succeeded"
-    assert "reasoned_context" in result.state_updates
+    assert "retrieved_context" in result.state_updates
     
-    res_docs = result.state_updates["reasoned_context"]
+    res_docs = result.state_updates["retrieved_context"]
     assert len(res_docs) == 1
-    assert res_docs[0]["content"] == "Researched 'syntropy dynamics' via reasoning_fsm"
-    assert res_docs[0]["meta_data"] == {"source": "reasoning"}
+    assert res_docs[0]["content"] == "Retrieved 'syntropy dynamics' via retrieval_fsm"
+    assert res_docs[0]["meta_data"] == {"source": "knowledge"}
 

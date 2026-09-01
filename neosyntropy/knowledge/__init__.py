@@ -2,7 +2,7 @@ from neosyntropy.knowledge.filesystem import FileSystemKnowledge
 from neosyntropy.knowledge.knowledge import Knowledge
 from neosyntropy.knowledge.protocol import (
     KnowledgeProtocol,
-    KnowledgeReasoningProtocol,
+    KnowledgeRetrievalProtocol,
     KnowledgeTransformProtocol,
 )
 
@@ -13,7 +13,7 @@ __all__ = [
     "FileSystemKnowledge",
     "KnowledgeProtocol",
     "KnowledgeTransformProtocol",
-    "KnowledgeReasoningProtocol",
+    "KnowledgeRetrievalProtocol",
     "transform",
     "Input",
     "Output",

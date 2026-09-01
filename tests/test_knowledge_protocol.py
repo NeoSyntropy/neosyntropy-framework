@@ -4,7 +4,7 @@ from typing import Any, List
 from neosyntropy.knowledge.document import Document
 from neosyntropy.knowledge.protocol import (
     KnowledgeProtocol,
-    KnowledgeReasoningProtocol,
+    KnowledgeRetrievalProtocol,
     KnowledgeTransformProtocol,
 )
 from neosyntropy.knowledge.transform import transform, Input, Output
@@ -45,19 +45,19 @@ class DummyTransformKnowledge:
         return True
 
 
-class DummyReasoningKnowledge:
-    def build_reasoning_fsm(self, **kwargs) -> Any:
-        return "reasoning_fsm_instance"
+class DummyRetrievalKnowledge:
+    def build_retrieval_fsm(self, knowledge: KnowledgeProtocol, **kwargs) -> Any:
+        return "retrieval_fsm_instance"
 
     def search(self, knowledge: KnowledgeProtocol, **kwargs) -> List[Document]:
         query = kwargs.get("query", "default")
-        reasoning_fsm = self.build_reasoning_fsm(**kwargs)
-        return [Document(content=f"Reasoned result for: {query} with {reasoning_fsm}")]
+        retrieval_fsm = self.build_retrieval_fsm(knowledge, **kwargs)
+        return [Document(content=f"Retrieved result for: {query} with {retrieval_fsm}")]
 
     async def asearch(self, knowledge: KnowledgeProtocol, **kwargs) -> List[Document]:
         query = kwargs.get("query", "default")
-        reasoning_fsm = self.build_reasoning_fsm(**kwargs)
-        return [Document(content=f"Async reasoned result for: {query} with {reasoning_fsm}")]
+        retrieval_fsm = self.build_retrieval_fsm(knowledge, **kwargs)
+        return [Document(content=f"Async retrieved result for: {query} with {retrieval_fsm}")]
 
 
 def test_knowledge_protocol_conformance():
@@ -75,19 +75,19 @@ def test_knowledge_transform_protocol_conformance():
     assert result == ["transformed_raw_data_source_via_workflow_instance"] or len(result) == 1
 
 
-def test_knowledge_reasoning_protocol_conformance():
-    instance = DummyReasoningKnowledge()
+def test_knowledge_retrieval_protocol_conformance():
+    instance = DummyRetrievalKnowledge()
     k = DummyKnowledge()
-    assert isinstance(instance, KnowledgeReasoningProtocol)
+    assert isinstance(instance, KnowledgeRetrievalProtocol)
 
     results = instance.search(k, query="test query")
     assert len(results) == 1
-    assert "Reasoned result for: test query with reasoning_fsm_instance" in results[0].content
+    assert "Retrieved result for: test query with retrieval_fsm_instance" in results[0].content
 
 
-def test_knowledge_reasoning_protocol_async():
-    instance = DummyReasoningKnowledge()
+def test_knowledge_retrieval_protocol_async():
+    instance = DummyRetrievalKnowledge()
     k = DummyKnowledge()
     results = asyncio.run(instance.asearch(k, query="async query"))
     assert len(results) == 1
-    assert "Async reasoned result for: async query with reasoning_fsm_instance" in results[0].content
+    assert "Async retrieved result for: async query with retrieval_fsm_instance" in results[0].content

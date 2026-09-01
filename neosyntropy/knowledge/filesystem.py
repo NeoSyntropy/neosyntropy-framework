@@ -355,7 +355,7 @@ class FileSystemKnowledge:
     def search(self, query: str | None = None, **kwargs: Any) -> Any:
         """Search the knowledge base for relevant documents or context.
 
-        Uses grep as the default search method. Executes reasoning using `build_reasoning_fsm`.
+        Uses grep as the default search method. Executes retrieval using `build_retrieval_fsm`.
 
         Args:
             query: Optional query string.
@@ -378,9 +378,9 @@ class FileSystemKnowledge:
     # Backwards compatibility alias
     aretrieve = asearch
 
-    def build_reasoning_fsm(self, steps: Optional[List[Any]] = None, **kwargs) -> Any:
-        """Build and return a multi-step reasoning FSM.
-        
+    def build_retrieval_fsm(self, steps: Optional[List[Any]] = None, **kwargs) -> Any:
+        """Build and return a multi-step retrieval FSM.
+
         Uses `ReasoningStep`s to sequence exploration through the filesystem.
         """
         from neosyntropy.core.node import ReasoningNode, ReasoningStep, SchemaNode

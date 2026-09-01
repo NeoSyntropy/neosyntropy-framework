@@ -2,7 +2,7 @@
 
 The node reads a query string from the workflow state, performs a semantic
 search against a :class:`~neosyntropy.vectordb.base.VectorDb` or
-:class:`~neosyntropy.knowledge.protocol.KnowledgeReasoningProtocol`, and
+:class:`~neosyntropy.knowledge.protocol.KnowledgeRetrievalProtocol`, and
 writes the retrieved documents back into state under ``output_key``.
 """
 from __future__ import annotations
@@ -13,13 +13,13 @@ from ..models import NodeResult
 from .base import Node
 
 if TYPE_CHECKING:
-    from ...knowledge.protocol import KnowledgeReasoningProtocol
+    from ...knowledge.protocol import KnowledgeRetrievalProtocol
     from ...vectordb.base import VectorDb
 
 
 def retrieval_node(
     id: str,
-    vector_db: "VectorDb | KnowledgeReasoningProtocol | None" = None,
+    vector_db: "VectorDb | KnowledgeRetrievalProtocol | None" = None,
     query_key: str = "query",
     output_key: str = "context",
     limit: int = 5,
@@ -27,7 +27,7 @@ def retrieval_node(
     name: str | None = None,
     group: str | None = None,
     format_as_string: bool = False,
-    knowledge: "KnowledgeReasoningProtocol | VectorDb | None" = None,
+    knowledge: "KnowledgeRetrievalProtocol | VectorDb | None" = None,
     **kwargs: Any,
 ) -> Node:
     """Create an FSM :class:`~base.Node` that retrieves documents and injects them into state.
@@ -35,7 +35,7 @@ def retrieval_node(
     Args:
         id:              Unique node id.
         vector_db:       The :class:`~neosyntropy.vectordb.base.VectorDb` or
-                         :class:`~neosyntropy.knowledge.protocol.KnowledgeReasoningProtocol`
+                         :class:`~neosyntropy.knowledge.protocol.KnowledgeRetrievalProtocol`
                          to query.
         query_key:       State key that contains the search query string.
         output_key:      State key where retrieved results are written.

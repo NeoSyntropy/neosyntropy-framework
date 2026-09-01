@@ -4,7 +4,7 @@ Knowledge Class
 Core Knowledge implementation for managing knowledge bases, vector DBs,
 database connections, embedders, rerankers, and ETL transformations.
 
-Implements KnowledgeTransformProtocol, KnowledgeReasoningProtocol, and VectorDbKnowledgeProtocol,
+Implements KnowledgeTransformProtocol, KnowledgeRetrievalProtocol, and VectorDbKnowledgeProtocol,
 enabling loading, transforming, storing, and multi-vector-db search capabilities.
 """
 
@@ -14,7 +14,7 @@ from neosyntropy.knowledge.content import Content, ContentStatus
 from neosyntropy.knowledge.document import Document
 from neosyntropy.knowledge.protocol import (
     KnowledgeProtocol,
-    KnowledgeReasoningProtocol,
+    KnowledgeRetrievalProtocol,
     KnowledgeTransformProtocol,
 )
 from neosyntropy.knowledge.remote_content.base import BaseStorageConfig

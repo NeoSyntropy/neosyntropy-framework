@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from neosyntropy.knowledge.filesystem import FileSystemKnowledge
-from neosyntropy.knowledge.protocol import KnowledgeReasoningProtocol, KnowledgeTransformProtocol
+from neosyntropy.knowledge.protocol import KnowledgeRetrievalProtocol, KnowledgeTransformProtocol
 from neosyntropy.core.graph import Workflow, FSM
 from neosyntropy.core.node import ReasoningStep
 
@@ -9,7 +9,7 @@ def test_filesystem_knowledge_protocols(tmp_path: Path):
     """Test that FileSystemKnowledge conforms to the necessary protocols."""
     fs_knowledge = FileSystemKnowledge(base_dir=str(tmp_path))
     
-    assert isinstance(fs_knowledge, KnowledgeReasoningProtocol)
+    assert isinstance(fs_knowledge, KnowledgeRetrievalProtocol)
     assert isinstance(fs_knowledge, KnowledgeTransformProtocol)
     
 def test_filesystem_knowledge_search(tmp_path: Path):
@@ -26,12 +26,12 @@ def test_filesystem_knowledge_search(tmp_path: Path):
     assert len(docs_old) == 1
     assert "banana" in docs_old[0].content
 
-def test_filesystem_knowledge_build_reasoning_fsm(tmp_path: Path):
-    """Test building a multi-step reasoning FSM with ReasoningStep."""
+def test_filesystem_knowledge_build_retrieval_fsm(tmp_path: Path):
+    """Test building a multi-step retrieval FSM with ReasoningStep."""
     fs_knowledge = FileSystemKnowledge(base_dir=str(tmp_path))
     
     # Use default steps
-    workflow = fs_knowledge.build_reasoning_fsm()
+    workflow = fs_knowledge.build_retrieval_fsm()
     assert isinstance(workflow, FSM)
     
     # Custom steps
@@ -39,7 +39,7 @@ def test_filesystem_knowledge_build_reasoning_fsm(tmp_path: Path):
         ReasoningStep("Custom test instruction 1", tools=["list_files"]),
         ReasoningStep("Custom test instruction 2", tools=["get_file"])
     ]
-    custom_workflow = fs_knowledge.build_reasoning_fsm(steps=custom_steps)
+    custom_workflow = fs_knowledge.build_retrieval_fsm(steps=custom_steps)
     assert isinstance(custom_workflow, FSM)
     assert len(custom_workflow.nodes) == 3
     
