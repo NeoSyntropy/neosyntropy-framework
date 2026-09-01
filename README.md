@@ -19,7 +19,7 @@ Agent frameworks leave two problems unsolved:
 | **Before** — [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High — pays per token, retry, and reasoning step regardless of outcome | Unpredictable — hallucinated steps and uncontrolled loops degrade end-to-end reliability |
 | **After** — [NeoSyntropy](https://github.com/NeoSyntropy/neosyntropy-framework) (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
 
-**Launch offer:** The first 10,000 users to [sign up](https://neosyntropy.com) receive **10,000 free state transitions**.
+**Get started free:** The first 10,000 developers receive **10,000 free state transitions**. [Create your account →](https://neosyntropy.com)
 
 ## The problem is not always the model. It is the execution loop.
 
@@ -117,15 +117,6 @@ Site docs:
 [Edges](https://docs.neosyntropy.com/concepts/edges) ·
 [Groups](https://docs.neosyntropy.com/concepts/groups) ·
 [Control manager](https://docs.neosyntropy.com/concepts/control-manager)
-
-## Sign up
-
-Create an account at [neosyntropy.com](https://neosyntropy.com) to use the
-control plane. New accounts include **100 free node passes** so you can run
-workflows before buying credits. Paid usage starts at **$0.005 per node**
-(minimum); the starter package is **$10 for 1,000 state transitions**. After
-sign-in, create a project and copy your API key + project id for the client
-below (or use the **neo-code** CLI: `neo-code login`).
 
 ## Install
 
