@@ -33,8 +33,8 @@ class Knowledge(RemoteKnowledge, KnowledgeTransformProtocol, KnowledgeProtocol):
     Example:
         ```python
         from neosyntropy.knowledge import Knowledge
-        from neosyntropy.vectordb.lancedb import LanceDb
-        from neosyntropy.vectordb.chroma import ChromaDb
+        from neosyntropy.databases.vector.lancedb import LanceDb
+        from neosyntropy.databases.vector.chroma import ChromaDb
 
         vdb1 = LanceDb(table_name="docs_1")
         vdb2 = ChromaDb(collection_name="docs_2")

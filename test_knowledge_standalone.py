@@ -1,6 +1,6 @@
 import asyncio
 from neosyntropy.knowledge.filesystem import FileSystemKnowledge
-from neosyntropy.vectordb.base import VectorDb
+from neosyntropy.databases.vector.base import VectorDb
 
 async def main():
     print("Testing FileSystemKnowledge initialization...")

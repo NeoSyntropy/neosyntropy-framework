@@ -11,10 +11,10 @@ to gain remote content loading capabilities.
 from typing import List, Optional
 
 from neosyntropy.knowledge.content import Content
-from neosyntropy.knowledge.loaders.azure_blob import AzureBlobLoader
-from neosyntropy.knowledge.loaders.gcs import GCSLoader
+from neosyntropy.databases.storage.azure_blob import AzureBlobLoader
+from neosyntropy.databases.storage.gcs import GCSLoader
 from neosyntropy.knowledge.loaders.github import GitHubLoader
-from neosyntropy.knowledge.loaders.s3 import S3Loader
+from neosyntropy.databases.storage.s3 import S3Loader
 from neosyntropy.knowledge.loaders.sharepoint import SharePointLoader
 from neosyntropy.knowledge.remote_content.base import BaseStorageConfig
 from neosyntropy.knowledge.remote_content.remote_content import (

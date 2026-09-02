@@ -1,7 +1,7 @@
 """retrieval_node: FSM node that queries a vector store or knowledge base.
 
 The node reads a query string from the workflow state, performs a semantic
-search against a :class:`~neosyntropy.vectordb.base.VectorDb` or
+search against a :class:`~neosyntropy.databases.vector.base.VectorDb` or
 :class:`~neosyntropy.knowledge.protocol.KnowledgeRetrievalProtocol`, and
 writes the retrieved documents back into state under ``output_key``.
 """
@@ -14,7 +14,7 @@ from .base import Node
 
 if TYPE_CHECKING:
     from ...knowledge.protocol import KnowledgeRetrievalProtocol
-    from ...vectordb.base import VectorDb
+    from ...databases.vector.base import VectorDb
 
 
 def retrieval_node(
@@ -34,7 +34,7 @@ def retrieval_node(
 
     Args:
         id:              Unique node id.
-        vector_db:       The :class:`~neosyntropy.vectordb.base.VectorDb` or
+        vector_db:       The :class:`~neosyntropy.databases.vector.base.VectorDb` or
                          :class:`~neosyntropy.knowledge.protocol.KnowledgeRetrievalProtocol`
                          to query.
         query_key:       State key that contains the search query string.

@@ -49,6 +49,8 @@ Determinism here is **architectural** (graphs + gates), not `temperature=0`.
 | Emit typed structure | `SchemaNode` |
 | Both gather + emit | `CombineNode` |
 | Side effects in your code | `@node` handler |
+| Ground a step in stored documents | `Knowledge` + `retrieval_node` |
+| Persist / query structured data | database adapter (`VectorDb`, Postgres, Mongo, …) |
 | Anything else | dedicated `fallback` node |
 
 ---
@@ -1213,6 +1215,122 @@ See [`examples/observability.py`](../examples/observability.py).
 
 ---
 
+## 13. Databases — storage adapters
+
+A **database** is a storage backend the graph can call. It is not a graph
+vertex. Nodes, `Knowledge`, and `retrieval_node` use adapters; the FSM still
+decides when those calls are allowed.
+
+The package groups adapters by kind:
+
+| Kind | Package | Typical use |
+|---|---|---|
+| Vector | [`neosyntropy.databases.vector`](../neosyntropy/databases/vector) | Semantic search (`VectorDb.search`) — Chroma, Qdrant, Pinecone, pgvector, … |
+| Graph | [`neosyntropy.databases.graph`](../neosyntropy/databases/graph) | Relationship queries (Neo4j) |
+| Relational | [`neosyntropy.databases.relational`](../neosyntropy/databases/relational) | SQL reads (Postgres) |
+| Document | [`neosyntropy.databases.document`](../neosyntropy/databases/document) | Document stores (Mongo) |
+| Object / blob | [`neosyntropy.databases.storage`](../neosyntropy/databases/storage) | Load files from S3, GCS, Azure Blob |
+
+Vector stores share [`VectorDb`](../neosyntropy/databases/vector/base.py):
+`insert` / `upsert` / `search`. That is the interface `Knowledge` and
+`retrieval_node` call.
+
+```python
+from neosyntropy.databases.vector.chroma import ChromaDb
+from neosyntropy.knowledge.document import Document
+
+chroma = ChromaDb(collection="support_docs", persistent_client=True, path="./chroma")
+chroma.upsert("policy", [Document(content="Renewals bill on the first of the month.")])
+hits = chroma.search("when are renewals billed?", limit=5)
+```
+
+**Use when:** you need a concrete store. Prefer wrapping it in `Knowledge`
+when several stores, loaders, or transforms share one corpus.
+
+---
+
+## 14. Knowledge — corpus and ETL
+
+[`Knowledge`](../neosyntropy/knowledge/knowledge.py) is a named corpus over
+one or more databases: vector stores, SQL/NoSQL readers, embedders, rerankers,
+and an optional transform pipeline.
+
+It implements three protocols:
+
+- **`KnowledgeProtocol`** — `insert` / `delete` / `get` against registered stores
+- **`KnowledgeTransformProtocol`** — `load` → `transform` (optional FSM) → `store`
+- **`KnowledgeRetrievalProtocol`** — `search` / `asearch` (and optional retrieval FSM)
+
+[`FileSystemKnowledge`](../neosyntropy/knowledge/filesystem.py) is the local
+directory variant (grep / list / read). Loaders pull remote files into a
+corpus: S3, GCS, Azure Blob, SharePoint, GitHub.
+
+```python
+from neosyntropy.knowledge import Knowledge
+from neosyntropy.knowledge.document import Document
+from neosyntropy.databases.vector.chroma import ChromaDb
+
+kb = Knowledge(
+    name="support_kb",
+    vector_db=ChromaDb(collection="support_docs"),
+)
+kb.insert([Document(content="Grace period: 7 days after the due date.")])
+docs = kb.search("grace period", limit=5)
+```
+
+Transform one corpus into another (chunk, summarize, re-embed):
+
+```python
+from neosyntropy.knowledge import Knowledge
+
+summaries = Knowledge(transform=summarize_documents, name="summaries")
+summaries.transform(source=source_kb, destination=dest_kb)
+```
+
+Cookbook: [`retrieval`](../cookbook/knowledge/retrieval_example.py) ·
+[`transform`](../cookbook/knowledge/transform_example.py)
+
+**Use when:** nodes should read a shared, versioned corpus rather than
+embedding store credentials and query logic in every handler.
+
+---
+
+## 15. `retrieval_node` — knowledge into state
+
+[`retrieval_node`](../neosyntropy/core/node/retrieval.py) is an FSM node that
+reads a query from workflow state, searches a `Knowledge` base or `VectorDb`,
+and writes the hits back into state. Retrieval is a capability on the graph,
+not an agent choosing tools.
+
+```python
+from neosyntropy import retrieval_node, node, OpenInput, EmptyOutput
+from neosyntropy.knowledge.filesystem import FileSystemKnowledge
+
+kb = FileSystemKnowledge(base_dir="./policies")
+
+fetch_context = retrieval_node(
+    id="FetchContext",
+    knowledge=kb,          # or vector_db=chroma
+    query_key="query",
+    output_key="context",
+    limit=5,
+)
+
+@node(id="Answer", prerequisites=("FetchContext",), input_schema=OpenInput, output_schema=EmptyOutput)
+def answer(ctx):
+    context = ctx.state["context"]   # list of {content, meta_data}
+    return ctx.result(output={}, state_updates={"answered": True}, next_state="End")
+```
+
+Pass `format_as_string=True` when a later `ReasoningNode` or `SchemaNode`
+should receive one concatenated block instead of a list of dicts.
+
+**Use when:** a graph step must ground itself in stored documents before a
+model or handler runs. Keep store credentials on `Knowledge`; keep permission
+on the FSM.
+
+---
+
 ## How the concepts compose
 
 ```text
@@ -1229,6 +1347,8 @@ Start ──entry──▶   │   (hard rules)        │
             Group           SchemaNode      Fallback
          (entry node)      (JSON out)     (OutOfScope)
                │
+        retrieval_node        ← Knowledge / VectorDb → state
+               │
         ReasoningNode / CombineNode
                │
         DeterministicRouter   ← eligibility / payout rules
@@ -1240,7 +1360,7 @@ Example shape for a support desk:
 
 1. `CheckAuth` (`DeterministicRouter`) — token valid or force login
 2. `CustomerIntent` (`SemanticRouter`) — refund / status / fallback
-3. `refunds` group entry → `InvestigateRefund` (`ReasoningNode` + tools)
+3. `refunds` group entry → `FetchPolicy` (`retrieval_node` + `Knowledge`) → `InvestigateRefund` (`ReasoningNode` + tools)
 4. `RefundLogic` (`DeterministicRouter`) — eligible → issue, else deny
 5. `OutOfScope` — dedicated fallback when nothing matches
 
@@ -1257,3 +1377,6 @@ Example shape for a support desk:
   [control manager](https://docs.neosyntropy.com/concepts/control-manager)
 - [`examples/refund_workflow.py`](../examples/refund_workflow.py)
 - [`examples/model_tool_calling.py`](../examples/model_tool_calling.py)
+- [`cookbook/knowledge`](../cookbook/knowledge) — `FileSystemKnowledge` search and transform
+- [`neosyntropy/databases`](../neosyntropy/databases) — vector, graph, relational, document, and object-store adapters
+- [`retrieval_node`](../neosyntropy/core/node/retrieval.py) — inject search hits into FSM state

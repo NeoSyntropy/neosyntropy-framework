@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 from neosyntropy.core.node import retrieval_node
-from neosyntropy.vectordb.base import VectorDb
+from neosyntropy.databases.vector.base import VectorDb
 from neosyntropy.knowledge.document.base import Document
 
 def test_retrieval_node_success():

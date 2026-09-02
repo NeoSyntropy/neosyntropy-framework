@@ -5,21 +5,21 @@
 <h1 align="center">NeoSyntropy Framework</h1>
 
 <p align="center">
-  <strong>Your code should control AI — not an agent controlling your code.</strong>
+  <strong>Your code should control AI, not an agent controlling your code.</strong>
 </p>
 Agent frameworks leave two problems unsolved:
 
-1. **High unit cost and uncontrolled token spend** — you pay for tokens, retries, and unnecessary reasoning instead of paying for a successful business outcome; every step can re-read context, trigger self-correction loops, and consume more tokens, while finance only sees the cost after the fact.
+1. **High unit cost and uncontrolled token spend:** you pay for tokens, retries, and unnecessary reasoning instead of paying for a successful business outcome; every step can re-read context, trigger self-correction loops, and consume more tokens, while finance only sees the cost after the fact.
 
-2. **Hallucinations** — models can invent steps, facts, and transitions that were never approved.
+2. **Hallucinations:** models can invent steps, facts, and transitions that were never approved.
 
 
 | | Process Unit Cost | Full Workflow Accuracy |
 |---|---|---|
-| **Before** — [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High — pays per token, retry, and reasoning step regardless of outcome | Unpredictable — hallucinated steps and uncontrolled loops degrade end-to-end reliability |
-| **After** — [NeoSyntropy](https://github.com/NeoSyntropy/neosyntropy-framework) (`neo-code`) | Low — model is called only for narrow structured extraction; execution stays in your code | Deterministic — every transition is validated by a schema your application owns |
+| **Before:** [BMad Agent](https://github.com/bmadcode/BMAD-METHOD) | High: pays per token, retry, and reasoning step regardless of outcome | Unpredictable: hallucinated steps and uncontrolled loops degrade end-to-end reliability |
+| **After:** [NeoSyntropy](https://github.com/NeoSyntropy/neosyntropy-framework) (`neo-code`) | Low: model is called only for narrow structured extraction; execution stays in your code | Deterministic: every transition is validated by a schema your application owns |
 
-**Get started free:** The first 10,000 developers receive **10,000 free state transitions**. [Create your account →](https://neosyntropy.com)
+**Get started free:** The first 10,000 developers receive **10,000 free state transitions**. [Create your account](https://neosyntropy.com)
 
 ## The problem is not always the model. It is the execution loop.
 
@@ -27,11 +27,11 @@ In production, many AI workflows do not need an autonomous agent that reasons ab
 
 **They need a model to understand unstructured input and turn it into structured parameters for a function your application already controls.**
 
-If the next step is already known — call a refund function, look up an order, update a customer record, classify a request — there is little value in asking a powerful Foundation Model to repeatedly reason about the execution itself.
+If the next step is already known (call a refund function, look up an order, update a customer record, classify a request), there is little value in asking a powerful Foundation Model to repeatedly reason about the execution itself.
 
 The model only needs to answer a narrow question:
 
-**“Given this input, which parameters should I pass to this function?”**
+**"Given this input, which parameters should I pass to this function?"**
 
 That means the expensive, general-purpose reasoning capability of a Foundation Model can often be replaced by a small, task-specific model, while the application retains ownership of the actual decision and execution.
 
@@ -65,13 +65,13 @@ def quote_refund(params: RefundParams) -> dict:
 result = quote_refund(text="Refund $40 for order ord_123")
 ```
 
-**Unstructured input → model proposal → schema validation → trusted code execution**
+**Unstructured input, then model proposal, then schema validation, then trusted code execution**
 
 This is the fundamental shift: **the model does not own the workflow.**
 
 NeoSyntropy provides a deterministic control layer for AI workflows. Models can propose what should happen next, but a finite-state graph defines what is actually allowed to happen.
 
-Every action follows a path defined by the developer — with **0% deviation from the business logic**, enforced at the engine level rather than requested through a prompt.
+Every action follows a path defined by the developer, with **0% deviation from the business logic**, enforced at the engine level rather than requested through a prompt.
 
 ### From Foundation Models to task-specific models
 
@@ -83,7 +83,7 @@ As the workflow accumulates enough successful runs, NeoSyntropy automatically tu
 
 The loop stays inside the developer experience:
 
-**Collect → Fine-tune → Evaluate → Deploy**
+**Collect, Fine-tune, Evaluate, Deploy**
 
 Because the resulting model is trained for one narrowly defined task rather than general reasoning, it can achieve the required performance with a fraction of the cost and latency of a general-purpose Foundation Model.
 
@@ -99,24 +99,37 @@ router, and a `Group` when the operation needs multiple controlled steps.
 | Concept | Role |
 |---|---|
 | [`@function_calling` / `@workflow`](cookbook/decorators) | Turn a typed Python function into a controlled model call: predict validated parameters directly, or gather evidence in explicit reasoning steps first |
-| [`Node`](docs/concepts-explained.md#2-node--node--executable-capability) | Executable capability (Python handler or provider-backed). [`reasoning`](cookbook/fsm/reasoning_node_prompt_tools_example.py) · [`schema extraction`](cookbook/fsm/schema_node_example.py) · [`validation`](neosyntropy/core/node/validation.py) |
-| Router | [`semantic`](cookbook/fsm/semantic_router_sequential_example.py) — model picks among labeled targets, still validated against the graph. [`deterministic`](docs/concepts-explained.md#7-deterministicrouter--hard-rules) — first matching `(predicate, target)` rule wins |
+| [`Node`](docs/concepts-explained.md#2-node--node--executable-capability) | Executable capability (Python handler or provider-backed). [`reasoning`](cookbook/fsm/reasoning_node_prompt_tools_example.py) | [`schema extraction`](cookbook/fsm/schema_node_example.py) | [`validation`](neosyntropy/core/node/validation.py) |
+| Router | [`semantic`](cookbook/fsm/semantic_router_sequential_example.py): model picks among labeled targets, still validated against the graph. [`deterministic`](docs/concepts-explained.md#7-deterministicrouter--hard-rules): first matching `(predicate, target)` rule wins |
 | [`Group`](docs/concepts-explained.md#9-group--named-subgraph-optional) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
-| [`Validation`](cookbook/validation) | Gate any FSM level: validate a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/validation/node_validation_example.py) · [`group`](cookbook/validation/group_path_validation_example.py) · [`fsm`](cookbook/validation/fsm_path_validation_example.py) |
-| [`KPI`](cookbook/kpi) | Score any FSM level without gating the run: a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/kpi/node_kpi_example.py) · [`fsm`](cookbook/kpi/fsm_path_kpi_example.py) |
+| [`Validation`](cookbook/validation) | Gate any FSM level: validate a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/validation/node_validation_example.py) | [`group`](cookbook/validation/group_path_validation_example.py) | [`fsm`](cookbook/validation/fsm_path_validation_example.py) |
+| [`KPI`](cookbook/kpi) | Score any FSM level without gating the run: a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/kpi/node_kpi_example.py) | [`fsm`](cookbook/kpi/fsm_path_kpi_example.py) |
 
 Each concept explained (what / when / example):
-[`docs/concepts-explained.md`](docs/concepts-explained.md) ·
-[`cookbook/knowledge`](cookbook/knowledge) ·
+[`docs/concepts-explained.md`](docs/concepts-explained.md) |
 [`cookbook/decorators`](cookbook/decorators)
 
 Site docs:
-[Nodes](https://docs.neosyntropy.com/concepts/nodes) ·
-[Model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) ·
-[Routers](https://docs.neosyntropy.com/concepts/routers) ·
-[Edges](https://docs.neosyntropy.com/concepts/edges) ·
-[Groups](https://docs.neosyntropy.com/concepts/groups) ·
+[Nodes](https://docs.neosyntropy.com/concepts/nodes) |
+[Model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) |
+[Routers](https://docs.neosyntropy.com/concepts/routers) |
+[Edges](https://docs.neosyntropy.com/concepts/edges) |
+[Groups](https://docs.neosyntropy.com/concepts/groups) |
 [Control manager](https://docs.neosyntropy.com/concepts/control-manager)
+
+## How we use NeoSyntropy in production in real scenarios
+
+These five concepts are how a graph leaves the example and runs against real
+data, traffic, and jobs. Knowledge, transform, and retrieval are available now;
+entrypoints and workers are next.
+
+| Concept | Role |
+|---|---|
+| [`Knowledge`](neosyntropy/knowledge/knowledge.py) | How you define a datasource. One corpus can sit on multiple store types: vector DBs (Qdrant, Milvus, Chroma, Pinecone, etc.), graph (Neo4j), relational (Postgres), document (Mongo), and object storage (S3, GCS, Azure Blob). [`concepts`](docs/concepts-explained.md#14-knowledge--corpus-and-etl) | [`adapters`](neosyntropy/databases) |
+| [`KnowledgeTransform`](neosyntropy/knowledge/protocol.py) | Take a `Knowledge` source and transform it into another `Knowledge`. Ships **loader**, **chunker**, and **embedder**, built for ETL. [`cookbook`](cookbook/knowledge/transform_example.py) | [`concepts`](docs/concepts-explained.md#14-knowledge--corpus-and-etl) |
+| [`KnowledgeRetrieval`](neosyntropy/knowledge/protocol.py) | Wrapper for searching `Knowledge`: a `retrieval_node`, tools, and its own FSM for the retrieval loop. Keeps retrieval (and its governance) off the main workflow. [`cookbook`](cookbook/knowledge/retrieval_example.py) | [`concepts`](docs/concepts-explained.md#15-retrieval_node--knowledge-into-state) |
+| Entrypoint *(not implemented yet)* | An API that publishes the full FSM into NeoSyntropy cloud. |
+| Workers *(not implemented yet)* | Assign a worker to an FSM. The worker receives an event and activates that FSM. |
 
 ## Install
 
@@ -215,7 +228,7 @@ fsm = Workflow(
 )
 
 result = fsm.run(
-    {"text": "refund order ord_123 for 40 dollars — item arrived damaged"},
+    {"text": "refund order ord_123 for 40 dollars, item arrived damaged"},
     client=client,
 )
 
@@ -224,10 +237,10 @@ print(result.audit.committed_transitions)
 ```
 
 Every cycle returns a `RunResult` with a full `AuditRecord`. A rejection is a
-normal outcome — `result.rejected` is set and the audit explains why.
+normal outcome: `result.rejected` is set and the audit explains why.
 
-More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) ·
-[`examples/refund_workflow.py`](examples/refund_workflow.py) ·
+More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) |
+[`examples/refund_workflow.py`](examples/refund_workflow.py) |
 [`cookbook/decorators`](cookbook/decorators)
 
 ## License
@@ -241,8 +254,8 @@ NeoSyntropy Framework is source-available under the
 You are free to use, copy, modify, and distribute NeoSyntropy Framework for your
 own internal applications and non-competing products, subject to the terms below.
 
-**Commercial use that exposes the framework's functionality to third parties
-— including SaaS products, managed services, or embedded offerings — requires a
+**Commercial use that exposes the framework's functionality to third parties,
+including SaaS products, managed services, or embedded offerings, requires a
 separate commercial agreement with NeoSyntropy.**
 
 Contact **licensing@neosyntropy.com** to obtain a commercial license.
@@ -280,8 +293,8 @@ to applicable law.
 
 **Commercial License**
 
-Any use that falls outside the permissions above — including building products or
-services that make the framework's functionality available to third parties —
+Any use that falls outside the permissions above, including building products or
+services that make the framework's functionality available to third parties,
 requires a commercial license from NeoSyntropy. Contact
 **licensing@neosyntropy.com** to discuss commercial licensing terms.
 
