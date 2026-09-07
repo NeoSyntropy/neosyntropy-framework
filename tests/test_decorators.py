@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from neosyntropy import ReasoningStep, SchemaNode, ToolRegistry, Workflow, function_calling, workflow
+from neosyntropy import (
+    ReasoningStep,
+    SchemaNode,
+    ToolRegistry,
+    Workflow,
+    function_calling,
+    workflow,
+)
 from neosyntropy.monitor.graph.manifest import control_graph_manifest, graph_manifest
 
 
@@ -73,7 +80,7 @@ def test_async_function_calling_decorator_creation():
     assert callable(my_async_func)
 
 
-def test_graph_manifest_includes_decorator_and_function_source():
+def test_graph_manifest_includes_decorator_without_function_source():
     schema_node = SchemaNode(
         id="greet_schema",
         input_schema=SampleInput,
@@ -91,16 +98,18 @@ def test_graph_manifest_includes_decorator_and_function_source():
     fsm.function_source = {
         "function_name": "greet",
         "function_module": "tests.test_decorators",
-        "source_code": "def greet(params: GreetParams) -> str:\n    return f'Hello {params.name}'\n",
+        "source_code": (
+            "def greet(params: GreetParams) -> str:\n    return f'Hello {params.name}'\n"
+        ),
     }
     fsm.decorator = "function_calling"
 
     manifest = graph_manifest(fsm)
     assert manifest["decorator"] == "function_calling"
-    assert manifest["function_source"]
-    assert manifest["function_source"][0]["function_name"] == "greet"
-    assert "def greet" in manifest["function_source"][0]["source_code"]
+    assert "function_source" not in manifest
+    assert "source_code" not in str(manifest)
+    assert manifest["structure_hash"]
 
     control = control_graph_manifest(fsm)
     assert control["decorator"] == "function_calling"
-    assert "def greet" in control["function_source"][0]["source_code"]
+    assert "function_source" not in control

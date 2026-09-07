@@ -15,14 +15,14 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     ReasoningNode,
     SchemaNode,
     TextOutput,
+    ToolRegistry,
     edge_deterministic,
     edge_fallback,
-    ToolRegistry,
     tool,
 )
 
@@ -47,9 +47,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -61,8 +59,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -86,9 +83,8 @@ class RoutingSummary(BaseModel):
     summary: str
 
 
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    client = _client_for_example()
+def build_tools() -> ToolRegistry:
+    """Build a fresh routing-tool registry without performing I/O."""
     routing_tools = ToolRegistry()
 
     @tool(registry=routing_tools)
@@ -103,7 +99,9 @@ def main() -> None:
     def shipping_tool(args: SupportRequest) -> dict:
         """Return a shipping-focused signal for the request."""
         text = args.intent.lower()
-        confidence = 0.86 if any(token in text for token in ["ship", "delivery", "package"]) else 0.42
+        confidence = (
+            0.86 if any(token in text for token in ["ship", "delivery", "package"]) else 0.42
+        )
         print(f"[shipping_tool] {args.intent!r} -> shipping")
         return {"lane": "shipping", "confidence": confidence, "evidence": "shipping keywords"}
 
@@ -111,10 +109,17 @@ def main() -> None:
     def returns_tool(args: SupportRequest) -> dict:
         """Return a returns-focused signal for the request."""
         text = args.intent.lower()
-        confidence = 0.86 if any(token in text for token in ["return", "refund", "exchange"]) else 0.42
+        confidence = (
+            0.86 if any(token in text for token in ["return", "refund", "exchange"]) else 0.42
+        )
         print(f"[returns_tool] {args.intent!r} -> returns")
         return {"lane": "returns", "confidence": confidence, "evidence": "returns keywords"}
 
+    return routing_tools
+
+
+def build_fsm(provider: str) -> FSM:
+    """Build the tool-enabled reasoning graph without performing I/O."""
     route = ReasoningNode(
         id="RouteIntent",
         input_schema=SupportRequest,
@@ -124,7 +129,7 @@ def main() -> None:
             "the user's intent is about billing, shipping, or returns. Then produce a "
             "RoutingSummary with lane, confidence, and summary."
         ),
-        provider=_provider(),
+        provider=provider,
         output_schema=RoutingSummary,
     )
 
@@ -132,12 +137,12 @@ def main() -> None:
         id="OutOfScope",
         input_schema=SupportRequest,
         output_schema=TextOutput,
-        provider=_provider(),
+        provider=provider,
         prompt="Politely refuse out-of-scope requests in one short sentence.",
         is_fallback=True,
     )
 
-    fsm = FSM(
+    return FSM(
         entry=route,
         nodes=[route, out_of_scope],
         edges=[
@@ -146,6 +151,13 @@ def main() -> None:
             edge_deterministic("OutOfScope", "End"),
         ],
     )
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    client = _client_for_example()
+    routing_tools = build_tools()
+    fsm = build_fsm(_provider())
 
     result = fsm.run(
         SupportRequest(intent="My package is late and I need help with the shipment."),

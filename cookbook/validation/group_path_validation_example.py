@@ -35,8 +35,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     Group,
     SchemaNode,
     TextOutput,
@@ -45,7 +45,7 @@ from neosyntropy import (
 )
 from neosyntropy.core.validation import SemanticGroupPathValidator
 
-TESTS_ENV_PATH = Path(__file__).resolve().parents[3] / "tests" / ".env"
+TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 
@@ -66,25 +66,19 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
 def _provider() -> str:
-    return (
-        os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip()
-        or "gemini-2.5-flash"
-    )
+    return os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
 def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -99,6 +93,7 @@ def _client_for_example() -> Client:
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class TicketInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -121,6 +116,7 @@ class TriageResult(BaseModel):
 # ---------------------------------------------------------------------------
 # FSM builder
 # ---------------------------------------------------------------------------
+
 
 def build_fsm(provider: str) -> FSM:
     triage_group = Group(name="triage")
@@ -214,9 +210,7 @@ def main() -> None:
         print(f"final_state: {result.final_state}")
         for step in result.steps:
             for item in step.results:
-                label = (
-                    f"  node={item.node_id}  status={item.status}"
-                )
+                label = f"  node={item.node_id}  status={item.status}"
                 if item.node_id == "ValidateTriage":
                     label += f"  output={item.output}"
                 print(label)

@@ -1,16 +1,19 @@
 """Graph manifest generators for UI visualization and telemetry."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from neosyntropy.core.graph import FSM
+from neosyntropy.monitor._manifest import structure_hash
+from neosyntropy.monitor.node.manifest import _node_structure
 
 if TYPE_CHECKING:
-    from neosyntropy.tools.registry import ToolRegistry
+    from neosyntropy.tools.core.registry import ToolRegistry
 
 
-def tool_catalog(tools: "ToolRegistry | Mapping[str, Any] | None" = None) -> list[dict[str, Any]]:
+def tool_catalog(tools: ToolRegistry | Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     """Serialize registered tools for console inspection (no handlers)."""
     if tools is None:
         return []
@@ -36,65 +39,6 @@ def tool_catalog(tools: "ToolRegistry | Mapping[str, Any] | None" = None) -> lis
     return catalog
 
 
-def _normalize_function_source(raw: Any) -> dict[str, Any] | None:
-    """Keep only the fields the console needs to render / redeploy a function."""
-    if not isinstance(raw, Mapping):
-        return None
-    name = raw.get("function_name") or raw.get("name")
-    source = raw.get("source_code")
-    if not name and not source:
-        return None
-    payload: dict[str, Any] = {}
-    node_id = raw.get("node_id")
-    if node_id:
-        payload["node_id"] = node_id
-    if name:
-        payload["function_name"] = name
-    module = raw.get("function_module")
-    if module:
-        payload["function_module"] = module
-    if source:
-        payload["source_code"] = source
-    return payload
-
-
-def _collect_function_sources(graph: FSM) -> list[dict[str, Any]]:
-    """Promote function source from the FSM and node metadata for console + deploy."""
-    sources: list[dict[str, Any]] = []
-    seen: set[tuple[Any, Any]] = set()
-
-    def add(raw: Any) -> None:
-        item = _normalize_function_source(raw)
-        if not item:
-            return
-        key = (item.get("function_name"), item.get("source_code"))
-        if key in seen:
-            return
-        seen.add(key)
-        sources.append(item)
-
-    fsm_source = getattr(graph, "function_source", None)
-    if isinstance(fsm_source, Mapping):
-        add(fsm_source)
-    elif isinstance(fsm_source, list):
-        for item in fsm_source:
-            add(item)
-
-    for item in graph.nodes.values():
-        meta = item.metadata or {}
-        if "source_code" not in meta and "function_name" not in meta:
-            continue
-        add(
-            {
-                "node_id": item.id,
-                "function_name": meta.get("function_name"),
-                "function_module": meta.get("function_module"),
-                "source_code": meta.get("source_code"),
-            }
-        )
-    return sources
-
-
 def _graph_decorator(graph: FSM) -> str | None:
     decorator = getattr(graph, "decorator", None)
     if isinstance(decorator, str) and decorator.strip():
@@ -102,9 +46,20 @@ def _graph_decorator(graph: FSM) -> str | None:
     return None
 
 
-def _node_metadata_without_source(item: Any) -> dict[str, Any]:
-    """Return node metadata with source_code stripped (promoted to top-level instead)."""
-    return {k: v for k, v in (item.metadata or {}).items() if k != "source_code"}
+def _graph_node_entry(
+    item: Any,
+    *,
+    control: bool = False,
+) -> dict[str, Any]:
+    """Compose a graph node entry from the node's own manifest.
+
+    Graph-only fields such as ``prerequisites`` are added for the control wire.
+    """
+    entry = _node_structure(item)
+    entry.pop("schema_version", None)
+    if control:
+        entry["prerequisites"] = list(item.prerequisites)
+    return entry
 
 
 def _router_providers(graph: FSM) -> dict[str, str]:
@@ -118,39 +73,84 @@ def _router_providers(graph: FSM) -> dict[str, str]:
     return providers
 
 
-def graph_manifest(
-    graph: FSM,
-    tools: "ToolRegistry | Mapping[str, Any] | None" = None,
-) -> dict[str, Any]:
-    """Return the visualization graph shape safe to send off-process."""
+def _target_detail(target: Any) -> dict[str, str]:
+    type_name = type(target).__name__
+    if isinstance(target, str):
+        return {"target": target, "target_kind": "node"}
+    if type_name == "Group":
+        return {"target": str(target.name), "target_kind": "group"}
+    if type_name in {"SemanticRouter", "DeterministicRouter"}:
+        return {"target": str(target.id), "target_kind": "router"}
+    return {"target": str(getattr(target, "id", target)), "target_kind": "node"}
+
+
+def _router_detail(router: Any) -> dict[str, Any]:
+    """Serialize an authored router declaration without executable objects."""
+    state_id = str(getattr(router, "router_state_id", router.id))
+    if type(router).__name__ == "SemanticRouter":
+        fallback = getattr(router, "fallback_node", None)
+        return {
+            "id": router.id,
+            "type": "semantic",
+            "state_id": state_id,
+            "description": getattr(router, "description", "") or "",
+            "group": getattr(router, "group", None),
+            "input_schema": getattr(router, "json_schema", None),
+            "reasoning": getattr(router, "reasoning", "low"),
+            "category": getattr(router, "category", "general"),
+            "provider": getattr(router, "provider", "neosyntropy/base"),
+            "prompt": getattr(router, "prompt", "") or "",
+            "tools": list(getattr(router, "tools", ()) or ()),
+            "routes": {
+                label: _target_detail(target)
+                for label, target in getattr(router, "routes", {}).items()
+            },
+            "fallback": _target_detail(fallback) if fallback is not None else None,
+        }
     return {
-        "schema_version": 1,
+        "id": router.id,
+        "type": "deterministic",
+        "state_id": state_id,
+        "description": getattr(router, "description", "") or "",
+        "group": getattr(router, "group", None),
+        "input_schema": getattr(router, "json_schema", None),
+        "rules": [
+            {"index": index, **_target_detail(target)}
+            for index, (_, target) in enumerate(getattr(router, "rules", ()) or ())
+        ],
+    }
+
+
+def _group_detail(group: Any) -> dict[str, Any]:
+    return {
+        "name": group.name,
+        "description": getattr(group, "description", "") or "",
+        "metadata": dict(getattr(group, "metadata", {}) or {}),
+        "entry": group.entry_id() if hasattr(group, "entry_id") else None,
+        "parent": getattr(group, "parent", None),
+        "namespace": bool(getattr(group, "_namespace", False)),
+    }
+
+
+def _graph_manifest_structure(
+    graph: FSM,
+    tools: ToolRegistry | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the visualization structure before attaching code references."""
+    return {
+        "schema_version": 3,
         "entry": graph.entry_id,
         "input_schema": graph.input_schema,
         "nodes": [
-            *[
-                {
-                    "id": item.id,
-                    "name": item.name,
-                    "description": item.description,
-                    "prompt": item.prompt,
-                    "mode": item.mode,
-                    "kind": item.kind,
-                    "tools": list(item.tools),
-                    "input_schema": item.input_schema,
-                    "output_schema": item.output_schema,
-                    "group": item.group,
-                    "is_fallback": item.is_fallback,
-                    "metadata": _node_metadata_without_source(item),
-                }
-                for item in graph.nodes.values()
-            ],
+            *[_graph_node_entry(item) for item in graph.nodes.values()],
             *[
                 {
                     "id": getattr(router, "router_state_id", router.id),
                     "name": router.id,
                     "description": getattr(router, "description", "") or "",
                     "prompt": getattr(router, "prompt", None) or None,
+                    "provider": getattr(router, "provider", "neosyntropy/base"),
+                    "prerequisites": [],
                     "mode": None,
                     "kind": "router",
                     "tools": list(getattr(router, "tools", ()) or ()),
@@ -169,81 +169,39 @@ def graph_manifest(
                 "target": edge.target,
                 "kind": edge.kind,
                 "target_kind": edge.target_kind,
+                "description": edge.description,
             }
             for edge in graph.edges
         ],
-        "groups": [
-            {
-                "name": group.name,
-                **(
-                    {"entry": entry}
-                    if (
-                        entry := (
-                            group.entry_id() if hasattr(group, "entry_id") else None
-                        )
-                    )
-                    else {}
-                ),
-                **({"parent": group.parent} if getattr(group, "parent", None) else {}),
-            }
-            for group in graph.groups.values()
-        ],
+        "groups": [_group_detail(group) for group in graph.groups.values()],
         "routers": sorted(graph.router_ids),
+        "routers_detail": [_router_detail(router) for router in graph.routers.values()],
         "router_providers": _router_providers(graph),
         "tools": tool_catalog(tools),
-        **(
-            {"decorator": decorator}
-            if (decorator := _graph_decorator(graph))
-            else {}
-        ),
-        "function_source": _collect_function_sources(graph),
+        "allow_unlisted_transitions": graph.allow_unlisted_transitions,
+        "decorator": _graph_decorator(graph),
     }
 
 
-def control_graph_manifest(
+def _control_graph_manifest_structure(
     graph: FSM,
-    tools: "ToolRegistry | Mapping[str, Any] | None" = None,
+    tools: ToolRegistry | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Graph definition for backend-owned control runs (+ console display)."""
-    groups: list[dict[str, Any]] = []
-    for group in graph.groups.values():
-        payload: dict[str, Any] = {"name": group.name}
-        entry = group.entry_id() if hasattr(group, "entry_id") else None
-        if entry:
-            payload["entry"] = entry
-        parent = getattr(group, "parent", None)
-        if parent:
-            payload["parent"] = parent
-        groups.append(payload)
+    groups = [_group_detail(group) for group in graph.groups.values()]
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "entry": graph.entry_id,
         "input_schema": graph.input_schema,
         "nodes": [
-            *[
-                {
-                    "id": item.id,
-                    "name": item.name,
-                    "description": item.description,
-                    "prompt": item.prompt,
-                    "mode": item.mode,
-                    "kind": item.kind,
-                    "tools": list(item.tools),
-                    "prerequisites": list(item.prerequisites),
-                    "is_fallback": item.is_fallback,
-                    "group": item.group,
-                    "input_schema": item.input_schema,
-                    "output_schema": item.output_schema,
-                    "metadata": _node_metadata_without_source(item),
-                }
-                for item in graph.nodes.values()
-            ],
+            *[_graph_node_entry(item, control=True) for item in graph.nodes.values()],
             *[
                 {
                     "id": getattr(router, "router_state_id", router.id),
                     "name": router.id,
                     "description": getattr(router, "description", "") or "",
                     "prompt": getattr(router, "prompt", None) or None,
+                    "provider": getattr(router, "provider", "neosyntropy/base"),
                     "mode": None,
                     "kind": "router",
                     "tools": list(getattr(router, "tools", ()) or ()),
@@ -263,18 +221,42 @@ def control_graph_manifest(
                 "target": edge.target,
                 "kind": edge.kind,
                 "target_kind": edge.target_kind,
+                "description": edge.description,
             }
             for edge in graph.edges
         ],
         "groups": groups,
         "routers": sorted(graph.router_ids),
+        "routers_detail": [_router_detail(router) for router in graph.routers.values()],
         "router_providers": _router_providers(graph),
         "tools": tool_catalog(tools),
         "allow_unlisted_transitions": graph.allow_unlisted_transitions,
-        **(
-            {"decorator": decorator}
-            if (decorator := _graph_decorator(graph))
-            else {}
-        ),
-        "function_source": _collect_function_sources(graph),
+        "decorator": _graph_decorator(graph),
     }
+
+
+def graph_manifest(
+    graph: FSM,
+    tools: ToolRegistry | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a structure-only visualization/telemetry manifest."""
+    payload = _graph_manifest_structure(graph, tools)
+    payload["structure_hash"] = structure_hash(payload)
+    return payload
+
+
+def control_graph_manifest(
+    graph: FSM,
+    tools: ToolRegistry | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a structure-only control manifest."""
+    payload = _control_graph_manifest_structure(graph, tools)
+    payload["structure_hash"] = structure_hash(payload)
+    return payload
+
+
+__all__ = [
+    "control_graph_manifest",
+    "graph_manifest",
+    "tool_catalog",
+]

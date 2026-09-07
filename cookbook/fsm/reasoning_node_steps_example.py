@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from neosyntropy import Client, ReasoningNode, ReasoningStep, ToolRegistry, tool
+from neosyntropy import FSM, Client, ReasoningNode, ReasoningStep, ToolRegistry, tool
 
 TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -37,9 +37,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -51,8 +49,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -86,9 +83,8 @@ class PolicyArgs(BaseModel):
     text: str
 
 
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    client = _client_for_example()
+def build_tools() -> ToolRegistry:
+    """Build a fresh support-tool registry without performing I/O."""
     registry = ToolRegistry()
 
     @tool(registry=registry)
@@ -120,7 +116,12 @@ def main() -> None:
         print(f"[find_policy] {args.text!r} -> {policy}")
         return {"policy": policy, "next_action": next_action}
 
-    fsm = ReasoningNode(
+    return registry
+
+
+def build_fsm(provider: str) -> FSM:
+    """Build the step-based reasoning graph without performing I/O."""
+    return ReasoningNode(
         id="SupportDecision",
         input_schema=CaseInput,
         steps=[
@@ -139,9 +140,16 @@ def main() -> None:
                 )
             ),
         ],
-        provider=_provider(),
+        provider=provider,
         output_schema=DecisionSummary,
     )
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    client = _client_for_example()
+    registry = build_tools()
+    fsm = build_fsm(_provider())
 
     result = fsm.run(
         CaseInput(text="I need to change my delivery address before the package is shipped."),

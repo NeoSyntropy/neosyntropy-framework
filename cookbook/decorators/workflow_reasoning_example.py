@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -61,9 +62,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -71,8 +70,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -110,8 +108,8 @@ class OrderParams(BaseModel):
     warehouse: str
 
 
-def main() -> None:
-    client = _client_for_example()
+def build_tools() -> ToolRegistry:
+    """Build a fresh catalog-tool registry without performing I/O."""
     registry = ToolRegistry()
 
     @tool(registry=registry)
@@ -132,6 +130,16 @@ def main() -> None:
         print(f"[check_stock] {args.sku} -> {row}")
         return {"sku": args.sku, **row}
 
+    return registry
+
+
+def build_workflow(
+    client: Client | None,
+    tools: ToolRegistry,
+    provider: str,
+) -> Callable[..., str]:
+    """Build the decorated order workflow without creating a client or running it."""
+
     @workflow(
         input_schema=UserRequest,
         steps=[
@@ -151,8 +159,8 @@ def main() -> None:
             ),
         ],
         client=client,
-        tools=registry,
-        provider=_provider(),
+        tools=tools,
+        provider=provider,
     )
     def place_order(params: OrderParams) -> str:
         available = STOCK.get(params.sku, {}).get("available", 0)
@@ -161,9 +169,15 @@ def main() -> None:
                 f"Cannot order {params.quantity} x {params.sku}: "
                 f"only {available} in {params.warehouse}."
             )
-        return (
-            f"Ordered {params.quantity} x {params.sku} from {params.warehouse}."
-        )
+        return f"Ordered {params.quantity} x {params.sku} from {params.warehouse}."
+
+    return place_order
+
+
+def main() -> None:
+    client = _client_for_example()
+    registry = build_tools()
+    place_order = build_workflow(client, registry, _provider())
 
     result = place_order(text="We need 3 laptops for the sales team")
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

@@ -12,6 +12,7 @@ local backend by default.
 - `reasoning_node_steps_example.py` - reasoning flow with step-by-step instructions
 - `semantic_router_parallel_example.py` - semantic router with independent branches
 - `semantic_router_sequential_example.py` - semantic router with a chained follow-up step
+- `python_node_example.py` - pure Python handler nodes with the `@node` decorator (no LLM)
 
 ## Run
 
@@ -21,6 +22,7 @@ python cookbook/fsm/reasoning_node_prompt_tools_example.py
 python cookbook/fsm/reasoning_node_steps_example.py
 python cookbook/fsm/semantic_router_parallel_example.py
 python cookbook/fsm/semantic_router_sequential_example.py
+python cookbook/fsm/python_node_example.py
 ```
 
 If the local GPU inference service is unavailable, set `NEOSYNTROPY_PROVIDER`

@@ -19,6 +19,7 @@ Run::
 
     python cookbook/kpi/node_kpi_example.py
 """
+
 from __future__ import annotations
 
 import os
@@ -29,8 +30,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     NodeContext,
     SchemaNode,
     TextOutput,
@@ -40,7 +41,7 @@ from neosyntropy import (
 from neosyntropy.core.kpi import functional_kpi_node
 from neosyntropy.core.node.schemas import KpiResult
 
-TESTS_ENV_PATH = Path(__file__).resolve().parents[3] / "tests" / ".env"
+TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 
@@ -61,25 +62,19 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
 def _provider() -> str:
-    return (
-        os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip()
-        or "gemini-2.5-flash"
-    )
+    return os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
 def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -94,6 +89,7 @@ def _client_for_example() -> Client:
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class ArticleInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -122,10 +118,7 @@ _IDEAL_BULLET_WORDS = 15
 def _score_summary(headline: str, bullets: list[str]) -> KpiResult:
     headline_score = 1.0 if len(headline.split()) > 5 else 0.5 if headline else 0.0
     bullet_score = min(len(bullets), _IDEAL_BULLETS) / _IDEAL_BULLETS
-    avg_words = (
-        sum(len(b.split()) for b in bullets) / len(bullets)
-        if bullets else 0
-    )
+    avg_words = sum(len(b.split()) for b in bullets) / len(bullets) if bullets else 0
     length_score = min(avg_words, _IDEAL_BULLET_WORDS) / _IDEAL_BULLET_WORDS
     score = round(0.4 * headline_score + 0.4 * bullet_score + 0.2 * length_score, 3)
     return KpiResult(
@@ -142,6 +135,7 @@ def _score_summary(headline: str, bullets: list[str]) -> KpiResult:
 # ---------------------------------------------------------------------------
 # FSM builder
 # ---------------------------------------------------------------------------
+
 
 def build_fsm(provider: str) -> FSM:
     summarize = SchemaNode(

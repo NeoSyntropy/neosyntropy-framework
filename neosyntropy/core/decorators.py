@@ -205,6 +205,7 @@ def function_calling(
                     await _maybe_log_run(client, project_id, input_data, result)
                 return _last_node_output(result)
 
+            async_wrapper.__neosyntropy_fsm__ = fsm  # type: ignore[attr-defined]
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -216,6 +217,7 @@ def function_calling(
                     _maybe_log_run_sync(client, project_id, input_data, result)
                 return _last_node_output(result)
 
+            sync_wrapper.__neosyntropy_fsm__ = fsm  # type: ignore[attr-defined]
             return sync_wrapper
 
     return decorator
@@ -224,7 +226,9 @@ def function_calling(
 def workflow(
     *,
     input_schema: type[BaseModel] | dict[str, Any],
-    steps: Sequence[ReasoningStep | SchemaStep],
+    steps: Sequence[ReasoningStep | SchemaStep] | None = None,
+    prompt: str | None = None,
+    reasoning_steps: Sequence[ReasoningStep] | None = None,
     client: Any = None,
     project_id: str | None = None,
     provider: str = "neosyntropy/base",
@@ -242,13 +246,24 @@ def workflow(
     decoration time so the console can display them before any run.
     """
 
+    if steps is not None and (prompt is not None or reasoning_steps is not None):
+        raise TypeError("pass steps= or the legacy prompt=/reasoning_steps= arguments, not both")
+    resolved_steps: Sequence[ReasoningStep | SchemaStep]
+    if steps is not None:
+        resolved_steps = steps
+    else:
+        resolved_steps = [
+            *(reasoning_steps or ()),
+            SchemaStep(instruction=prompt),
+        ]
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        if not steps or not isinstance(steps[-1], SchemaStep):
+        if not resolved_steps or not isinstance(resolved_steps[-1], SchemaStep):
             raise ValueError(f"@workflow for '{func.__name__}' must end with a SchemaStep.")
 
         sequence: list[Any] = []
 
-        for i, step in enumerate(steps[:-1]):
+        for i, step in enumerate(resolved_steps[:-1]):
             if not isinstance(step, ReasoningStep):
                 raise ValueError("All steps before the final SchemaStep must be ReasoningSteps.")
             step_id = f"{func.__name__}_reasoning_{i}"
@@ -262,7 +277,7 @@ def workflow(
                 )
             )
 
-        schema_step = steps[-1]
+        schema_step = resolved_steps[-1]
         schema_node_id = f"{func.__name__}_schema"
         final_prompt = schema_step.instruction or (
             f"Extract the parameters required by the function '{func.__name__}' "
@@ -312,6 +327,8 @@ def workflow(
                     await _maybe_log_run(client, project_id, input_data, result)
                 return _last_node_output(result)
 
+            async_wrapper.__neosyntropy_fsm__ = fsm  # type: ignore[attr-defined]
+            async_wrapper.__neosyntropy_tools__ = tools  # type: ignore[attr-defined]
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -323,6 +340,8 @@ def workflow(
                     _maybe_log_run_sync(client, project_id, input_data, result)
                 return _last_node_output(result)
 
+            sync_wrapper.__neosyntropy_fsm__ = fsm  # type: ignore[attr-defined]
+            sync_wrapper.__neosyntropy_tools__ = tools  # type: ignore[attr-defined]
             return sync_wrapper
 
     return decorator

@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Mapping, Protocol
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -94,6 +96,89 @@ class Client:
         self._backend.project_id = self.project_id
         return project
 
+    def get_graph(self, graph_id: str) -> dict[str, Any]:
+        """Fetch a stored graph and bind this client to its project."""
+        graph_id = str(graph_id).strip()
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if self.project_id:
+            graph = self._backend.get_project_graph(self.project_id, graph_id)
+        else:
+            graph = self._backend.get_graph(graph_id)
+            project_id = graph.get("project_id")
+            if not project_id:
+                raise BackendError("backend returned a graph without project_id")
+            self.project_id = str(project_id)
+            self._backend.project_id = self.project_id
+        return graph
+
+    def register_graph_structure(
+        self, manifest: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Register source-free graph governance for the bound project."""
+        backend = self._as_backend()
+        return backend._register_graph_structure(
+            self.project_id or "", dict(manifest)
+        )
+
+    def publish_graph_recovery(
+        self,
+        graph_id: str,
+        manifest: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Publish the latest executable recovery revision for a graph."""
+        backend = self._as_backend()
+        return backend._publish_graph_recovery(
+            self.project_id or "",
+            str(graph_id),
+            dict(manifest),
+        )
+
+    def upload_code_bundles(self, bundles: Mapping[str, bytes]) -> None:
+        """Upload code bundles missing from the currently bound project."""
+        backend = self._as_backend()
+        hashes = list(bundles)
+        missing = backend.missing_code_artifacts(self.project_id or "", hashes)
+        for sha256 in missing:
+            bundle = bundles.get(sha256)
+            if bundle is None:
+                raise BackendError(
+                    f"backend requested unknown code artifact {sha256}"
+                )
+            backend.upload_code_artifact(self.project_id or "", sha256, bundle)
+
+    def get_graph_code_bundles(
+        self, graph_id: str
+    ) -> dict[str, tuple[dict[str, Any], bytes]]:
+        """Download and return the verified bundles associated with a graph."""
+        snapshot = self.get_graph_snapshot(graph_id)
+        associations = snapshot["artifacts"]
+        bundles = snapshot["bundles"]
+        return {
+            str(association["artifact"]["sha256"]): (
+                association,
+                bundles[str(association["artifact"]["sha256"])],
+            )
+            for association in associations
+        }
+
+    def get_graph_snapshot(
+        self,
+        graph_id: str,
+        *,
+        graph_record: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Fetch the exact graph record, associations, and GCS bundle bytes."""
+        if not self.project_id:
+            self.get_graph(graph_id)
+        backend = self._as_backend()
+        project_id = self.project_id or ""
+        return backend._get_graph_snapshot(
+            project_id,
+            str(graph_id),
+            graph_record=graph_record,
+        )
+
     def _as_backend(self) -> BackendClient:
         if not self.project_id:
             raise ValueError(
@@ -148,6 +233,8 @@ class BackendClient:
         if not any((base_url, access_token, api_key, project_id)):
             return None
         if not (access_token or api_key):
+            if not project_id:
+                return None
             raise BackendError(
                 "NEOSYNTROPY_ACCESS_TOKEN or NEOSYNTROPY_API_KEY must be set"
             )
@@ -160,6 +247,65 @@ class BackendClient:
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await asyncio.to_thread(self._post, path, payload)
+
+    async def register_graph_structure(
+        self, manifest: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Register source-free graph governance for the bound project."""
+        if not self.project_id:
+            raise ValueError("project_id is required to register graph structure")
+        return await asyncio.to_thread(
+            self._register_graph_structure,
+            self.project_id,
+            dict(manifest),
+        )
+
+    async def publish_graph_recovery(
+        self,
+        graph_id: str,
+        manifest: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically publish a graph's latest executable recovery revision."""
+        if not self.project_id:
+            raise ValueError("project_id is required to publish graph recovery")
+        return await asyncio.to_thread(
+            self._publish_graph_recovery,
+            self.project_id,
+            str(graph_id),
+            dict(manifest),
+        )
+
+    async def get_graph_snapshot(self, graph_id: str) -> dict[str, Any]:
+        """Fetch a graph and its graph-scoped executable artifact payloads."""
+        if not self.project_id:
+            raise ValueError("project_id is required to fetch a graph snapshot")
+        return await asyncio.to_thread(
+            self._get_graph_snapshot,
+            self.project_id,
+            str(graph_id),
+        )
+
+    async def upload_code_bundles(self, bundles: Mapping[str, bytes]) -> None:
+        """Upload only code bundles absent from the bound project."""
+        if not bundles:
+            return
+        if not self.project_id:
+            raise ValueError("project_id is required to upload code artifacts")
+        missing = await asyncio.to_thread(
+            self.missing_code_artifacts, self.project_id, list(bundles)
+        )
+        for sha256 in missing:
+            bundle = bundles.get(sha256)
+            if bundle is None:
+                raise BackendError(
+                    f"backend requested unknown code artifact {sha256}"
+                )
+            await asyncio.to_thread(
+                self.upload_code_artifact,
+                self.project_id,
+                sha256,
+                bundle,
+            )
 
     async def telemetry_run_started(
         self,
@@ -393,6 +539,171 @@ class BackendClient:
             raise BackendError("backend response must be a JSON list")
         return [item for item in response if isinstance(item, dict)]
 
+    def get_graph(self, graph_id: str) -> dict[str, Any]:
+        """Fetch a graph by id across projects owned by this client."""
+        response = self._get(f"/observability/graphs/{graph_id}")
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid graph")
+        return response
+
+    def get_project_graph(self, project_id: str, graph_id: str) -> dict[str, Any]:
+        """Fetch a graph by id from a specific project."""
+        response = self._get(
+            f"/observability/projects/{project_id}/graphs/{graph_id}"
+        )
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid graph")
+        return response
+
+    def _register_graph_structure(
+        self,
+        project_id: str,
+        manifest: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = self._post(
+            f"/observability/projects/{project_id}/graphs",
+            {"manifest": manifest},
+        )
+        if not isinstance(response, dict) or not response.get("id"):
+            raise BackendError("backend returned an invalid registered graph")
+        return response
+
+    def _publish_graph_recovery(
+        self,
+        project_id: str,
+        graph_id: str,
+        manifest: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = self._request_bytes(
+            "PUT",
+            (
+                f"/observability/projects/{project_id}/graphs/"
+                f"{graph_id}/recovery"
+            ),
+            data=json.dumps(
+                {"manifest": manifest},
+                separators=(",", ":"),
+                default=str,
+            ).encode(),
+            content_type="application/json",
+            expect_json=True,
+        )
+        if not isinstance(response, dict) or not response.get("id"):
+            raise BackendError("backend returned an invalid recovery graph")
+        return response
+
+    def _get_graph_snapshot(
+        self,
+        project_id: str,
+        graph_id: str,
+        *,
+        graph_record: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        graph = (
+            dict(graph_record)
+            if graph_record is not None
+            else self.get_project_graph(project_id, graph_id)
+        )
+        associations = self.get_graph_artifacts(project_id, graph_id)
+        artifacts: list[tuple[str, str]] = []
+        for association in associations:
+            artifact = association.get("artifact")
+            if not isinstance(artifact, dict):
+                raise BackendError("backend returned an invalid graph artifact")
+            artifact_id = artifact.get("id")
+            sha256 = artifact.get("sha256")
+            if not artifact_id or not isinstance(sha256, str):
+                raise BackendError("backend returned an incomplete graph artifact")
+            artifacts.append((sha256, str(artifact_id)))
+
+        def download(item: tuple[str, str]) -> tuple[str, bytes]:
+            sha256, artifact_id = item
+            return (
+                sha256,
+                self.download_code_artifact(
+                    project_id,
+                    artifact_id,
+                    graph_id=graph_id,
+                ),
+            )
+
+        with ThreadPoolExecutor(max_workers=min(8, len(artifacts) or 1)) as pool:
+            bundles = dict(pool.map(download, artifacts))
+        return {
+            "graph": graph,
+            "artifacts": associations,
+            "bundles": bundles,
+        }
+
+    def missing_code_artifacts(
+        self, project_id: str, hashes: list[str]
+    ) -> list[str]:
+        """Return content hashes not yet stored for a project."""
+        if not hashes:
+            return []
+        response = self._post(
+            f"/observability/projects/{project_id}/code-artifacts/missing",
+            {"hashes": hashes},
+        )
+        missing = response.get("missing")
+        if not isinstance(missing, list) or not all(
+            isinstance(item, str) for item in missing
+        ):
+            raise BackendError("backend returned invalid missing artifact hashes")
+        return missing
+
+    def upload_code_artifact(
+        self, project_id: str, sha256: str, bundle: bytes
+    ) -> dict[str, Any]:
+        """Upload one immutable gzip code bundle."""
+        response = self._request_bytes(
+            "PUT",
+            f"/observability/projects/{project_id}/code-artifacts/{sha256}",
+            data=bundle,
+            content_type="application/gzip",
+            expect_json=True,
+        )
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid code artifact")
+        return response
+
+    def get_graph_artifacts(
+        self, project_id: str, graph_id: str
+    ) -> list[dict[str, Any]]:
+        """List code artifacts associated with a stored graph."""
+        response = self._get(
+            f"/observability/projects/{project_id}/graphs/{graph_id}/artifacts"
+        )
+        if not isinstance(response, list):
+            raise BackendError("backend returned an invalid graph artifact list")
+        return [item for item in response if isinstance(item, dict)]
+
+    def download_code_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        *,
+        graph_id: str | None = None,
+    ) -> bytes:
+        """Download one immutable gzip code bundle."""
+        path = (
+            f"/observability/projects/{project_id}/graphs/{graph_id}/"
+            f"artifacts/{artifact_id}/download"
+            if graph_id
+            else (
+                f"/observability/projects/{project_id}/"
+                f"code-artifacts/{artifact_id}/download"
+            )
+        )
+        response = self._request_bytes(
+            "GET",
+            path,
+            expect_json=False,
+        )
+        if not isinstance(response, bytes):
+            raise BackendError("backend returned an invalid code artifact bundle")
+        return response
+
     def ensure_project(
         self,
         *,
@@ -405,18 +716,24 @@ class BackendClient:
         if not slug or not str(slug).strip():
             raise ValueError("slug is required")
         slug = str(slug).strip()
+        name_clean = str(name).strip()
         for project in self.list_projects():
             if project.get("slug") == slug:
                 return project
-        payload: dict[str, Any] = {"name": str(name).strip(), "slug": slug}
+        payload: dict[str, Any] = {"name": name_clean, "slug": slug}
         if description is not None:
             payload["description"] = description
         try:
             created = self._post("/observability/projects", payload)
         except BackendError as exc:
             if exc.http_status == 409:
+                # The backend enforces a case-insensitive unique name constraint
+                # in addition to (user_id, slug). On conflict, search by both
+                # slug and name so idempotent callers can reuse the project.
                 for project in self.list_projects():
-                    if project.get("slug") == slug:
+                    if project.get("slug") == slug or (
+                        project.get("name", "").lower() == name_clean.lower()
+                    ):
                         return project
             raise
         if not isinstance(created, dict) or not created.get("id"):
@@ -651,6 +968,66 @@ class BackendClient:
             raise BackendError("backend response must be a JSON object")
         return decoded
 
+    def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: bytes | None = None,
+        content_type: str | None = None,
+        expect_json: bool,
+    ) -> bytes | dict[str, Any]:
+        """Issue an authenticated binary request used by code artifact APIs."""
+        token = self.access_token or self.api_key
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json" if expect_json else "application/gzip",
+        }
+        if content_type:
+            headers["Content-Type"] = content_type
+        if self.project_id:
+            headers["X-NeoSyntropy-Project-ID"] = self.project_id
+        request = Request(
+            f"{self.base_url}/{path.lstrip('/')}",
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = response.read()
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            code: str | None = None
+            try:
+                payload = json.loads(detail)
+                nested = payload.get("detail", detail)
+                if isinstance(nested, dict):
+                    code = nested.get("code")
+                    detail = nested.get("message", nested)
+                else:
+                    detail = nested
+            except json.JSONDecodeError:
+                pass
+            raise BackendError(
+                f"backend returned HTTP {exc.code}: {detail}",
+                code=code if isinstance(code, str) else None,
+                http_status=exc.code,
+            ) from exc
+        except URLError as exc:
+            raise BackendError(
+                f"cannot reach NeoSyntropy backend: {exc.reason}"
+            ) from exc
+        if not expect_json:
+            return body
+        try:
+            decoded = json.loads(body.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BackendError("backend returned invalid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise BackendError("backend response must be a JSON object")
+        return decoded
+
 
 def _wire_context(context: RunContext) -> dict[str, Any]:
     """Strip fields the backend wire models reject (e.g. message metadata)."""
@@ -748,12 +1125,21 @@ _CONTROL_API_GRAPH_FIELDS = frozenset(
 )
 
 
-def _control_api_graph(graph_manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _control_api_graph(
+    graph_manifest: Mapping[str, Any],
+    *,
+    include_handler_code: bool = False,
+) -> dict[str, Any]:
     """Project a rich manifest onto the backend ControlGraph wire contract.
 
     Console manifests embed router stubs in ``nodes`` (``kind: "router"``) for
     display. The control API only accepts executable nodes there; routers belong
     exclusively in the ``routers`` id list.
+
+    ``include_handler_code`` is ``False`` by default (Phase 1 gate).  Set it to
+    ``True`` only when the backend ``ControlGraph`` schema has been extended to
+    accept the ``handler_code`` field (Phase 2).  The backend currently uses
+    ``extra="forbid"`` on ``WireModel``, so passing unknown fields will raise.
     """
     nodes: list[dict[str, Any]] = []
     router_ids: list[str] = []
@@ -795,6 +1181,16 @@ def _control_api_graph(graph_manifest: Mapping[str, Any]) -> dict[str, Any]:
     payload.setdefault("groups", [])
     payload.setdefault("allow_unlisted_transitions", False)
     payload.setdefault("router_providers", {})
+    # Phase-2 gate: assemble node-owned VFS payloads. Nodes carry handler_code;
+    # the graph does not duplicate it. Default off until ControlGraph accepts it.
+    if include_handler_code:
+        handler_code = {
+            node["id"]: node["handler_code"]
+            for node in graph_manifest.get("nodes") or []
+            if isinstance(node, Mapping) and node.get("id") and node.get("handler_code")
+        }
+        if handler_code:
+            payload["handler_code"] = handler_code
     return payload
 
 

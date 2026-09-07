@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable, Mapping
+from pathlib import PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 import jsonschema
@@ -63,12 +65,12 @@ def _resolve_routers(
     node plus a link edge; those are returned as the fourth tuple item.
     ``router_ids`` uses the actual router state (``{id}.Schema`` when high).
     """
-    from .routing.deterministic import DeterministicRouter
-    from .routing.semantic import SemanticRouter
     from .routing.declarations import (
         collect_nested_routers,
         compile_routers,
     )
+    from .routing.deterministic import DeterministicRouter
+    from .routing.semantic import SemanticRouter
 
     roots = list(routers)
     if entry is not None and isinstance(entry, (DeterministicRouter, SemanticRouter)):
@@ -186,7 +188,862 @@ def _entry_contract(
     return dict(node.input_schema), node.input_model
 
 
+def _load_manifest_handler(node_id: str, raw_code: Any) -> Any:
+    """Compile the extracted entry file and return its original Python handler."""
+    if not isinstance(raw_code, Mapping) or not raw_code.get("extractable"):
+        raise FSMValidationError(
+            [f"handler node {node_id!r} has no extractable handler_code"]
+        )
+    vfs = raw_code.get("vfs")
+    if not isinstance(vfs, Mapping) or not vfs:
+        raise FSMValidationError(
+            [f"handler node {node_id!r} has no handler source in handler_code"]
+        )
+    entry_file = str(raw_code.get("entry_file") or "")
+    if entry_file not in vfs:
+        entry_file = next(iter(vfs))
+    source = vfs.get(entry_file)
+    function_name = str(raw_code.get("function_name") or "").strip()
+    if not isinstance(source, str) or not function_name:
+        raise FSMValidationError(
+            [f"handler node {node_id!r} has incomplete handler_code"]
+        )
+    namespace: dict[str, Any] = {
+        "__file__": entry_file,
+        "__name__": f"_neosyntropy_loaded_{PurePosixPath(entry_file).stem}",
+        "__package__": None,
+    }
+    try:
+        exec(compile(source, entry_file, "exec"), namespace)
+    except Exception as exc:
+        raise FSMValidationError(
+            [f"could not load handler node {node_id!r}: {exc}"]
+        ) from exc
+    loaded = namespace.get(function_name)
+    handler = loaded.handler if isinstance(loaded, Node) else loaded
+    if not callable(handler):
+        raise FSMValidationError(
+            [f"handler node {node_id!r} did not define {function_name!r}"]
+        )
+    return handler
+
+
+def _artifact_ref(raw: Any) -> str | None:
+    if isinstance(raw, str) and raw:
+        return raw
+    if not isinstance(raw, Mapping):
+        return None
+    value = raw.get("artifact_ref") or raw.get("implementation_ref")
+    return str(value) if isinstance(value, str) and value else None
+
+
+def _deny_loaded_predicate(_state: Any) -> bool:
+    """Fail closed when inspecting a manifest without hydrated code."""
+    return False
+
+
+def _node_implementation_ref(raw_node: Mapping[str, Any]) -> str | None:
+    return (
+        _artifact_ref(raw_node.get("implementation"))
+        or _artifact_ref(raw_node.get("implementation_ref"))
+    )
+
+
+def _adapt_loaded_handler(
+    node_id: str,
+    raw_node: Mapping[str, Any],
+    handler: Any,
+) -> Any:
+    """Recreate framework-owned functional adapters around user callbacks."""
+    implementation = raw_node.get("implementation")
+    if not isinstance(implementation, Mapping):
+        return handler
+    adapter = implementation.get("adapter")
+    if not isinstance(adapter, Mapping):
+        return handler
+    adapter_kind = adapter.get("kind") or adapter.get("type")
+    if adapter_kind not in {
+        "closure_adapter",
+        "functional_validation",
+        "functional_kpi",
+    }:
+        return handler
+    callable_meta = adapter.get("callable")
+    module = (
+        str(callable_meta.get("module") or "")
+        if isinstance(callable_meta, Mapping)
+        else ""
+    )
+    bindings = adapter.get("bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    output_key = str(bindings.get("output_key") or "")
+    common = {
+        "id": node_id,
+        "name": str(raw_node.get("name") or node_id),
+        "description": str(raw_node.get("description") or ""),
+        "input_schema": raw_node.get("input_schema") or {"type": "object"},
+        "prerequisites": tuple(raw_node.get("prerequisites") or ()),
+        "group": raw_node.get("group"),
+        "metadata": dict(raw_node.get("metadata") or {}),
+    }
+    adapter_name = str(adapter.get("name") or adapter.get("adapter") or "")
+    if adapter_kind == "functional_validation" or (
+        adapter_kind == "closure_adapter"
+        and (module.endswith(".validation.node") or adapter_name == "functional_validation")
+    ):
+        from .validation import functional_validation_node
+
+        rebuilt = functional_validation_node(
+            **common,
+            output_key=output_key or "valid",
+        )(handler)
+        return rebuilt.handler
+    if adapter_kind == "functional_kpi" or (
+        adapter_kind == "closure_adapter"
+        and (module.endswith(".kpi.node") or adapter_name == "functional_kpi")
+    ):
+        from .kpi import functional_kpi_node
+
+        rebuilt = functional_kpi_node(
+            **common,
+            output_key=output_key or "score",
+        )(handler)
+        return rebuilt.handler
+    return handler
+
+
+def _json_schema_type(
+    raw: Any,
+    *,
+    root: Mapping[str, Any] | None = None,
+    name: str = "RemoteValue",
+) -> Any:
+    """Best-effort Python type for a recovered JSON Schema field."""
+    if not isinstance(raw, Mapping):
+        return Any
+    root = root or raw
+    reference = raw.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/"):
+        resolved: Any = root
+        try:
+            for part in reference[2:].split("/"):
+                resolved = resolved[part]
+        except (KeyError, TypeError):
+            return Any
+        return _json_schema_type(resolved, root=root, name=name)
+    alternatives = raw.get("anyOf") or raw.get("oneOf")
+    if isinstance(alternatives, list):
+        choices = [
+            _json_schema_type(item, root=root, name=name)
+            for item in alternatives
+            if isinstance(item, Mapping) and item.get("type") != "null"
+        ]
+        return choices[0] if choices else Any
+    kind = raw.get("type")
+    if kind == "object" or isinstance(raw.get("properties"), Mapping):
+        return _json_schema_model(name, raw, root=root)
+    if kind == "array":
+        return list[
+            _json_schema_type(
+                raw.get("items"),
+                root=root,
+                name=f"{name}Item",
+            )
+        ]
+    return {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": bool,
+    }.get(kind, Any)
+
+
+def _json_schema_model(
+    name: str,
+    schema: Mapping[str, Any],
+    *,
+    root: Mapping[str, Any] | None = None,
+) -> Any:
+    from pydantic import ConfigDict, create_model
+
+    root = root or schema
+    properties = schema.get("properties")
+    properties = properties if isinstance(properties, Mapping) else {}
+    required = set(schema.get("required") or ())
+    fields = {
+        str(field): (
+            _json_schema_type(
+                field_schema,
+                root=root,
+                name=f"{name}_{field}",
+            ),
+            ... if field in required else None,
+        )
+        for field, field_schema in properties.items()
+    }
+    return create_model(
+        name,
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+
+
+def _loaded_tool_registry(
+    manifest: Mapping[str, Any],
+    callables: Mapping[str, Any],
+) -> Any:
+    from ..tools.core.registry import RegisteredTool, ToolRegistry
+
+    catalog = {
+        str(item.get("name")): item
+        for item in manifest.get("tools") or ()
+        if isinstance(item, Mapping) and item.get("name")
+    }
+    links: dict[str, str] = {}
+    for raw_node in manifest.get("nodes") or ():
+        if not isinstance(raw_node, Mapping):
+            continue
+        implementation = raw_node.get("implementation")
+        if not isinstance(implementation, Mapping):
+            continue
+        tools = implementation.get("tools")
+        if not isinstance(tools, Mapping):
+            continue
+        for name, raw_link in tools.items():
+            ref = _artifact_ref(raw_link)
+            if ref:
+                links.setdefault(str(name), ref)
+
+    registry = ToolRegistry()
+    for name, ref in sorted(links.items()):
+        handler = callables.get(ref)
+        if not callable(handler):
+            raise FSMValidationError(
+                [f"tool {name!r} has no extractable remote code artifact"]
+            )
+        item = catalog.get(name, {})
+        schema = item.get("input_schema")
+        schema = schema if isinstance(schema, Mapping) else {}
+        args_model = _json_schema_model(f"Remote_{name}_Args", schema)
+        registry.register(
+            RegisteredTool(
+                name=name,
+                description=str(item.get("description") or ""),
+                args_model=args_model,
+                handler=handler,
+                json_schema=dict(schema),
+                return_schema=(
+                    dict(item["output_schema"])
+                    if isinstance(item.get("output_schema"), Mapping)
+                    else None
+                ),
+            )
+        )
+    return registry
+
+
+def _load_manifest_routers(
+    stubs: Mapping[str, Mapping[str, Any]],
+    edges: list[Edge],
+    providers: Any = None,
+    *,
+    details: Any = None,
+    callables: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Restore router declarations for manifest parity without recompiling edges."""
+    from .routing.deterministic import DeterministicRouter
+    from .routing.semantic import SemanticRouter
+
+    loaded: dict[str, Any] = {}
+    providers = providers if isinstance(providers, Mapping) else {}
+    hydrate_code = callables is not None
+    callables = callables or {}
+    detail_items = (
+        list(details.values()) if isinstance(details, Mapping) else list(details or ())
+    )
+    for detail in detail_items:
+        if not isinstance(detail, Mapping):
+            continue
+        router_id = str(
+            detail.get("id") or detail.get("name") or detail.get("router_id") or ""
+        ).strip()
+        state_id = str(
+            detail.get("state_id")
+            or detail.get("router_state_id")
+            or router_id
+        ).strip()
+        if not router_id:
+            continue
+        stub = stubs.get(state_id) or stubs.get(router_id) or {}
+        router_type = str(
+            detail.get("type") or detail.get("kind") or ""
+        ).removesuffix("_router")
+        schema = (
+            detail.get("input_schema")
+            or stub.get("input_schema")
+            or {"type": "object"}
+        )
+        common = {
+            "id": router_id,
+            "description": str(
+                detail.get("description") or stub.get("description") or ""
+            ),
+            "input_schema": schema,
+            "group": detail.get("group", stub.get("group")),
+        }
+        if router_type == "deterministic":
+            raw_rules = detail.get("rules") or ()
+            rules = []
+            for index, raw_rule in enumerate(raw_rules):
+                if not isinstance(raw_rule, Mapping):
+                    continue
+                reference = _artifact_ref(
+                    raw_rule.get("predicate")
+                    or raw_rule.get("predicate_ref")
+                    or raw_rule.get("guard_ref")
+                )
+                if reference is None:
+                    predicates = detail.get("predicate_refs")
+                    if isinstance(predicates, list) and index < len(predicates):
+                        reference = _artifact_ref(predicates[index])
+                predicate = callables.get(reference or "")
+                if not callable(predicate):
+                    if hydrate_code:
+                        raise FSMValidationError(
+                            [
+                                f"deterministic router {router_id!r} predicate "
+                                f"{reference!r} is unavailable"
+                            ]
+                        )
+                    predicate = _deny_loaded_predicate
+                target = (
+                    raw_rule.get("target")
+                    or raw_rule.get("target_id")
+                    or raw_rule.get("to")
+                )
+                if not target:
+                    raise FSMValidationError(
+                        [f"deterministic router {router_id!r} rule requires target"]
+                    )
+                rules.append((predicate, str(target)))
+            if not rules:
+                # v3 may keep predicate refs on the implementation link and
+                # targets in the explicit rule records.
+                implementation = detail.get("implementation")
+                refs = (
+                    implementation.get("predicates")
+                    if isinstance(implementation, Mapping)
+                    else ()
+                )
+                targets = [
+                    item.get("target")
+                    for item in raw_rules
+                    if isinstance(item, Mapping) and item.get("target")
+                ]
+                for reference, target in zip(refs or (), targets, strict=False):
+                    predicate = callables.get(str(reference))
+                    if callable(predicate):
+                        rules.append((predicate, str(target)))
+            if rules:
+                loaded[router_id] = DeterministicRouter(rules=rules, **common)
+                continue
+        if router_type == "semantic":
+            raw_routes = detail.get("routes") or {}
+            if isinstance(raw_routes, Mapping):
+                routes = {
+                    str(label): (
+                        str(target.get("target") or target.get("id"))
+                        if isinstance(target, Mapping)
+                        else str(target)
+                    )
+                    for label, target in raw_routes.items()
+                }
+            else:
+                routes = {
+                    str(item.get("label") or item.get("name")): str(
+                        item.get("target") or item.get("target_id")
+                    )
+                    for item in raw_routes
+                    if isinstance(item, Mapping)
+                    and (item.get("label") or item.get("name"))
+                    and (item.get("target") or item.get("target_id"))
+                }
+            fallback = detail.get("fallback") or detail.get("fallback_node")
+            if isinstance(fallback, Mapping):
+                fallback = fallback.get("target") or fallback.get("id")
+            loaded[router_id] = SemanticRouter(
+                **common,
+                routes=routes,
+                fallback_node=str(fallback) if fallback else None,
+                category=str(detail.get("category") or "general"),
+                provider=str(
+                    detail.get("provider")
+                    or providers.get(state_id)
+                    or "neosyntropy/base"
+                ),
+                reasoning=str(detail.get("reasoning") or "low"),
+                tools=tuple(detail.get("tools") or stub.get("tools") or ()),
+                prompt=str(detail.get("prompt") or stub.get("prompt") or ""),
+            )
+
+    restored_states = {
+        str(getattr(router, "router_state_id", router.id)) for router in loaded.values()
+    }
+    for state_id, stub in stubs.items():
+        if state_id in restored_states or str(stub.get("name") or state_id) in loaded:
+            continue
+        original_id = str(stub.get("name") or state_id)
+        semantic = [
+            edge
+            for edge in edges
+            if edge.source == state_id and edge.kind == "semantic"
+        ]
+        fallback = next(
+            (
+                edge.target
+                for edge in edges
+                if edge.source == state_id and edge.kind == "fallback"
+            ),
+            None,
+        )
+        if semantic:
+            routes = {
+                (edge.description.split(":", 1)[1].split("->", 1)[0].strip()
+                 if ":" in edge.description and "->" in edge.description
+                 else edge.target): edge.target
+                for edge in semantic
+            }
+            router = SemanticRouter(
+                id=original_id,
+                routes=routes,
+                fallback_node=fallback,
+                description=str(stub.get("description") or ""),
+                input_schema=stub.get("input_schema") or {"type": "object"},
+                group=stub.get("group"),
+                provider=str(providers.get(state_id) or "neosyntropy/base"),
+                reasoning="high" if state_id != original_id else "low",
+                tools=tuple(stub.get("tools") or ()),
+                prompt=str(stub.get("prompt") or ""),
+            )
+            loaded[original_id] = router
+            continue
+        loaded[original_id] = SimpleNamespace(
+            id=original_id,
+            router_state_id=state_id,
+            description=str(stub.get("description") or ""),
+            prompt=stub.get("prompt"),
+            tools=tuple(stub.get("tools") or ()),
+            json_schema=stub.get("input_schema") or {"type": "object"},
+            group=stub.get("group"),
+            provider=str(providers.get(state_id) or "neosyntropy/base"),
+        )
+    return loaded
+
+
 class FSM:
+    @classmethod
+    def load(cls, graph_id: str, *, client: Any) -> FSM:
+        """Load structure and verified code blobs for a stored graph UUID."""
+        from .._features import remote_execution_enabled
+
+        if not remote_execution_enabled():
+            raise RuntimeError(
+                "remote graph loading is disabled; set "
+                "NEO_REMOTE_EXECUTION=TRUE to enable it"
+            )
+        if client is None or not hasattr(client, "get_graph"):
+            raise TypeError("client must be a NeoSyntropy Client")
+        graph_id = str(graph_id).strip()
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        record = client.get_graph(graph_id)
+        if not isinstance(record, Mapping):
+            raise FSMValidationError(["backend returned an invalid graph record"])
+        structure_manifest = record.get("manifest")
+        recovery_manifest = record.get("recovery_manifest")
+        manifest = (
+            recovery_manifest
+            if isinstance(recovery_manifest, Mapping)
+            else structure_manifest
+        )
+        if not isinstance(manifest, Mapping):
+            raise FSMValidationError(["stored graph does not contain a manifest"])
+        if (
+            not isinstance(recovery_manifest, Mapping)
+            and "code_artifacts" not in manifest
+        ):
+            raise FSMValidationError(
+                ["stored graph does not have a remotely recoverable revision"]
+            )
+        code_callables: dict[str, Any] = {}
+        bundle_roots: list[str] = []
+        graph_snapshot: Mapping[str, Any] | None = None
+        snapshot_needs_write = False
+        raw_artifacts = manifest.get("code_artifacts")
+        from ..monitor._manifest import structure_hash as monitor_structure_hash
+        from ..remote import recovery_revision
+
+        expected_structure_hash = str(manifest.get("structure_hash") or "")
+        expected_revision = str(manifest.get("revision") or "")
+        if (
+            isinstance(recovery_manifest, Mapping)
+            and (
+                not isinstance(structure_manifest, Mapping)
+                or monitor_structure_hash(structure_manifest)
+                != expected_structure_hash
+            )
+        ):
+            raise FSMValidationError(["stored graph structure hash is invalid"])
+        if not expected_revision or recovery_revision(manifest) != expected_revision:
+            raise FSMValidationError(["stored graph recovery revision is invalid"])
+        from ..backend import Client as PublicClient
+
+        if isinstance(client, PublicClient):
+            from ..remote.snapshot import read_graph_snapshot
+
+            graph_snapshot = read_graph_snapshot(record)
+        if raw_artifacts:
+            from ..remote import (
+                CodeBundleError,
+                decode_code_bundle,
+                load_bundle_callable,
+                validate_manifest_compatibility,
+            )
+
+            try:
+                validate_manifest_compatibility(manifest)
+                for raw_ref in raw_artifacts:
+                    if isinstance(raw_ref, Mapping):
+                        validate_manifest_compatibility(
+                            {
+                                "schema_version": manifest.get("schema_version", 1),
+                                "runtime_compat": raw_ref.get("runtime_compat"),
+                                "dependency_lock": raw_ref.get("dependency_lock"),
+                            }
+                        )
+            except CodeBundleError as exc:
+                raise FSMValidationError(
+                    [f"stored graph runtime is incompatible: {exc}"]
+                ) from exc
+
+            if not hasattr(client, "get_graph_code_bundles"):
+                raise TypeError(
+                    "client must support graph code artifact downloads"
+                )
+            if isinstance(client, PublicClient):
+                if graph_snapshot is None:
+                    graph_snapshot = client.get_graph_snapshot(
+                        str(record.get("id") or graph_id),
+                        graph_record=record,
+                    )
+                    snapshot_needs_write = True
+                snapshot_associations = graph_snapshot.get("artifacts", [])
+                snapshot_bundles = graph_snapshot.get("bundles", {})
+                downloaded = {
+                    str(association["artifact"]["sha256"]): (
+                        association,
+                        snapshot_bundles[
+                            str(association["artifact"]["sha256"])
+                        ],
+                    )
+                    for association in snapshot_associations
+                }
+            else:
+                downloaded = client.get_graph_code_bundles(
+                    str(record.get("id") or graph_id)
+                )
+            if not isinstance(downloaded, Mapping):
+                raise FSMValidationError(
+                    ["backend returned invalid graph code artifacts"]
+                )
+            decoded_artifacts: list[tuple[str, str, Mapping[str, Any]]] = []
+            for raw_ref in raw_artifacts:
+                if not isinstance(raw_ref, Mapping):
+                    continue
+                artifact_id = str(raw_ref.get("id") or "")
+                digest = raw_ref.get("sha256")
+                required = bool(raw_ref.get("required", True))
+                if not digest or raw_ref.get("extractable") is False:
+                    if required and raw_ref.get("publishable") is False:
+                        reason = str(raw_ref.get("reason") or "artifact is unavailable")
+                        raise FSMValidationError(
+                            [f"required code artifact {artifact_id!r} is unavailable: {reason}"]
+                        )
+                    continue
+                stored = downloaded.get(str(digest))
+                if (
+                    not isinstance(stored, tuple)
+                    or len(stored) != 2
+                    or not isinstance(stored[1], bytes)
+                ):
+                    raise FSMValidationError(
+                        [f"code artifact {digest} is missing from stored graph"]
+                    )
+                association, bundle = stored
+                if isinstance(association, Mapping):
+                    associated_hash = str(
+                        association.get("structure_hash") or ""
+                    )
+                    if associated_hash and associated_hash != expected_structure_hash:
+                        raise FSMValidationError(
+                            [f"code artifact {digest} belongs to another graph revision"]
+                        )
+                    associated_revision = str(
+                        association.get("revision") or ""
+                    )
+                    if (
+                        associated_revision
+                        and associated_revision != expected_revision
+                    ):
+                        raise FSMValidationError(
+                            [f"code artifact {digest} has a mismatched revision"]
+                        )
+                try:
+                    payload = decode_code_bundle(
+                        bundle, expected_sha256=str(digest)
+                    )
+                except CodeBundleError as exc:
+                    raise FSMValidationError(
+                        [f"could not hydrate code artifact {digest}: {exc}"]
+                    ) from exc
+                decoded_artifacts.append((artifact_id, str(digest), payload))
+
+            pending = decoded_artifacts
+            while pending:
+                deferred: list[tuple[str, str, Mapping[str, Any]]] = []
+                progress = False
+                last_error: CodeBundleError | None = None
+                for artifact_id, digest, payload in pending:
+                    try:
+                        validate_manifest_compatibility(
+                            {
+                                "schema_version": manifest.get("schema_version", 1),
+                                "runtime_compat": payload.get("runtime_compat"),
+                                "dependency_lock": payload.get("dependency_lock"),
+                            }
+                        )
+                        loaded, root = load_bundle_callable(
+                            payload,
+                            artifact_id=artifact_id,
+                            callables=code_callables,
+                        )
+                    except CodeBundleError as exc:
+                        if "callable binding" in str(exc) and "unavailable" in str(exc):
+                            deferred.append((artifact_id, digest, payload))
+                            last_error = exc
+                            continue
+                        raise FSMValidationError(
+                            [f"could not hydrate code artifact {digest}: {exc}"]
+                        ) from exc
+                    code_callables[artifact_id] = loaded
+                    bundle_roots.append(root)
+                    progress = True
+                if deferred and not progress:
+                    raise FSMValidationError(
+                        [f"could not resolve code artifact bindings: {last_error}"]
+                    )
+                pending = deferred
+
+        fsm = cls.from_manifest(manifest, code_callables=code_callables)
+        fsm.graph_id = str(record.get("id") or graph_id)
+        from ..backend import BackendClient, Client
+
+        fsm._remote_client = (
+            client if isinstance(client, (Client, BackendClient)) else None
+        )
+        fsm._code_bundle_roots = bundle_roots
+        if isinstance(client, Client):
+            if graph_snapshot is None:
+                graph_snapshot = client.get_graph_snapshot(
+                    fsm.graph_id,
+                    graph_record=record,
+                )
+                snapshot_needs_write = True
+            from ..remote.snapshot import write_graph_snapshot
+
+            if snapshot_needs_write:
+                write_graph_snapshot(
+                    graph_snapshot["graph"],
+                    graph_snapshot["artifacts"],
+                    graph_snapshot["bundles"],
+                )
+        return fsm
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest: Mapping[str, Any],
+        *,
+        code_callables: Mapping[str, Any] | None = None,
+    ) -> FSM:
+        """Reconstruct an FSM from its already-compiled graph manifest."""
+        if not isinstance(manifest, Mapping):
+            raise TypeError("manifest must be a mapping")
+
+        graph = cls.__new__(cls)
+        graph.groups = {}
+        for raw_group in manifest.get("groups") or []:
+            if not isinstance(raw_group, Mapping) or not raw_group.get("name"):
+                continue
+            group = Group(
+                name=str(raw_group["name"]),
+                description=str(raw_group.get("description") or ""),
+                metadata=dict(raw_group.get("metadata") or {}),
+                entry=raw_group.get("entry"),
+                parent=raw_group.get("parent"),
+                # Manifest ids are already compiled; never namespace entry twice.
+                namespace=False,
+            )
+            object.__setattr__(
+                group, "_namespace", bool(raw_group.get("namespace", False))
+            )
+            graph.groups[group.name] = group
+
+        graph.nodes = {}
+        router_stubs: dict[str, Mapping[str, Any]] = {}
+        for raw_node in manifest.get("nodes") or []:
+            if not isinstance(raw_node, Mapping):
+                continue
+            node_id = str(raw_node.get("id") or "").strip()
+            if not node_id:
+                raise FSMValidationError(["manifest node requires id"])
+            if raw_node.get("kind") == "router":
+                router_stubs[node_id] = raw_node
+                continue
+            handler = None
+            implementation_ref = _node_implementation_ref(raw_node)
+            if implementation_ref and code_callables is not None:
+                handler = code_callables.get(implementation_ref)
+                if not callable(handler):
+                    artifact = next(
+                        (
+                            item
+                            for item in manifest.get("code_artifacts") or ()
+                            if isinstance(item, Mapping)
+                            and item.get("id") == implementation_ref
+                        ),
+                        {},
+                    )
+                    reason = (
+                        str(artifact.get("reason") or "artifact is unavailable")
+                        if isinstance(artifact, Mapping)
+                        else "artifact is unavailable"
+                    )
+                    raise FSMValidationError(
+                        [
+                            f"node {node_id!r} has no extractable remote "
+                            f"code artifact: {reason}"
+                        ]
+                    )
+                handler = _adapt_loaded_handler(node_id, raw_node, handler)
+            elif raw_node.get("kind") == "handler":
+                if raw_node.get("handler_code"):
+                    handler = _load_manifest_handler(
+                        node_id, raw_node.get("handler_code")
+                    )
+                elif code_callables is not None:
+                    raise FSMValidationError(
+                        [f"handler node {node_id!r} has no implementation reference"]
+                    )
+            try:
+                node = Node(
+                    id=node_id,
+                    name=str(raw_node.get("name") or node_id),
+                    description=str(raw_node.get("description") or ""),
+                    provider=str(raw_node.get("provider") or "neosyntropy/base"),
+                    prompt=str(raw_node.get("prompt") or ""),
+                    prerequisites=tuple(raw_node.get("prerequisites") or ()),
+                    tools=tuple(raw_node.get("tools") or ()),
+                    mode=raw_node.get("mode"),
+                    kind=raw_node.get("kind"),
+                    input_schema=raw_node.get("input_schema") or {},
+                    output_schema=raw_node.get("output_schema") or {},
+                    group=raw_node.get("group"),
+                    is_fallback=bool(raw_node.get("is_fallback")),
+                    metadata=dict(raw_node.get("metadata") or {}),
+                    handler=handler,
+                )
+            except (TypeError, ValueError) as exc:
+                raise FSMValidationError(
+                    [f"invalid manifest node {node_id!r}: {exc}"]
+                ) from exc
+            if callable(handler) and node.kind == "schema":
+                object.__setattr__(
+                    node,
+                    "output_model",
+                    _json_schema_model(
+                        f"Remote_{node_id}_Output",
+                        node.output_schema,
+                    ),
+                )
+            if node.id in graph.nodes:
+                raise FSMValidationError([f"duplicate node id {node.id!r}"])
+            graph.nodes[node.id] = node
+
+        graph.edges = []
+        raw_edges: list[Mapping[str, Any]] = []
+        for raw_edge in manifest.get("edges") or []:
+            try:
+                if isinstance(raw_edge, Mapping):
+                    raw_edges.append(raw_edge)
+                graph.edges.append(
+                    raw_edge
+                    if isinstance(raw_edge, Edge)
+                    else Edge.model_validate(raw_edge)
+                )
+            except (TypeError, ValueError) as exc:
+                raise FSMValidationError([f"invalid manifest edge: {exc}"]) from exc
+        if code_callables is not None:
+            from .routing.deterministic import _wrap_guard
+
+            for edge, raw_edge in zip(graph.edges, raw_edges, strict=False):
+                guard_ref = raw_edge.get("guard_ref")
+                if not guard_ref:
+                    continue
+                guard = code_callables.get(str(guard_ref))
+                if not callable(guard):
+                    raise FSMValidationError(
+                        [f"deterministic edge guard {guard_ref!r} is unavailable"]
+                    )
+                if " rule[" in edge.description:
+                    guard = _wrap_guard(guard)
+                object.__setattr__(edge, "guard", guard)
+
+        graph.router_ids = {
+            str(router_id)
+            for router_id in manifest.get("routers") or ()
+            if str(router_id).strip()
+        }
+        graph.router_ids.update(router_stubs)
+        graph.routers = _load_manifest_routers(
+            router_stubs,
+            graph.edges,
+            manifest.get("router_providers"),
+            details=manifest.get("routers_detail"),
+            callables=code_callables,
+        )
+        graph.router_ids.update(
+            str(getattr(router, "router_state_id", router.id))
+            for router in graph.routers.values()
+        )
+        graph.entry_id = str(manifest.get("entry") or "").strip()
+        graph.input_schema = dict(manifest.get("input_schema") or {})
+        graph.input_model = None
+        graph.allow_unlisted_transitions = bool(
+            manifest.get("allow_unlisted_transitions", False)
+        )
+        graph.decorator = manifest.get("decorator")
+        graph.flags = dict(manifest.get("flags") or {})
+        graph.runtime_compat = manifest.get("runtime_compat")
+        graph.dependency_lock = manifest.get("dependency_lock")
+        graph.tool_registry = (
+            _loaded_tool_registry(manifest, code_callables)
+            if code_callables is not None
+            else None
+        )
+        graph._validate(validate_reachability=True)
+        return graph
+
     def __init__(
         self,
         *,
@@ -640,7 +1497,7 @@ class FSM:
     ) -> list[Any]:
         """Run the FSM over a batch of requests concurrently using a thread pool."""
         from concurrent.futures import ThreadPoolExecutor
-        
+
         results = []
         # Limit the number of concurrent threads to batch_size
         max_workers = min(batch_size, len(requests)) if requests else 1
@@ -674,7 +1531,7 @@ class FSM:
     ) -> list[Any]:
         """Async run the FSM over a batch of requests concurrently."""
         import asyncio
-        
+
         async def _bounded_arun(semaphore: asyncio.Semaphore, req: Any):
             async with semaphore:
                 return await self.arun(
@@ -685,7 +1542,7 @@ class FSM:
                     max_cycles=max_cycles,
                     **kwargs
                 )
-                
+
         semaphore = asyncio.Semaphore(batch_size)
         tasks = [_bounded_arun(semaphore, req) for req in requests]
         return await asyncio.gather(*tasks)
@@ -697,6 +1554,7 @@ class FSM:
         state: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         from pydantic import BaseModel
+
         from .models import RunRequest
 
         payload: dict[str, Any] = {}
@@ -725,7 +1583,13 @@ class FSM:
                     "input": dict(req_dict.get("input") or {}),
                     "state": dict(state if state is not None else req_dict.get("state") or {}),
                 }
-                for key in ("current_state", "prior_executions", "request_id", "metadata", "history"):
+                for key in (
+                    "current_state",
+                    "prior_executions",
+                    "request_id",
+                    "metadata",
+                    "history",
+                ):
                     if key in req_dict:
                         payload[key] = req_dict[key]
             else:
@@ -866,7 +1730,22 @@ class FSM:
     ) -> Any:
         from ..control.manager import ControlManager
 
-        return ControlManager(self, client=client, tools=tools, **kwargs)
+        resolved_tools = (
+            tools
+            if tools is not None
+            else getattr(self, "tool_registry", None)
+        )
+        resolved_client = (
+            client
+            if client is not None
+            else getattr(self, "_remote_client", None)
+        )
+        return ControlManager(
+            self,
+            client=resolved_client,
+            tools=resolved_tools,
+            **kwargs,
+        )
 
 
 def _flood(origin: str, adjacency: dict[str, set[str]]) -> set[str]:

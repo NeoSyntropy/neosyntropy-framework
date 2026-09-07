@@ -5,7 +5,12 @@ from unittest.mock import patch
 
 import pytest
 
-from neosyntropy.backend import BackendClient, BackendError, Client, DEFAULT_API_URL
+from neosyntropy.backend import (
+    DEFAULT_API_URL,
+    BackendClient,
+    BackendError,
+    Client,
+)
 
 
 def test_client_accepts_explicit_project_id() -> None:
@@ -124,6 +129,55 @@ def test_from_env_allows_api_key_without_project_id(
     assert client.api_key == "nsk_env"
     assert client.project_id is None
     assert client.base_url == f"{DEFAULT_API_URL}/api/v1"
+
+
+def test_from_env_ignores_api_url_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEOSYNTROPY_API_URL", "https://example.invalid")
+    monkeypatch.delenv("NEOSYNTROPY_API_KEY", raising=False)
+    monkeypatch.delenv("NEOSYNTROPY_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("NEOSYNTROPY_PROJECT_ID", raising=False)
+
+    assert BackendClient.from_env() is None
+
+
+def test_client_separates_structure_and_recovery_publication() -> None:
+    client = Client(api_key="nsk_test", project_id="project-1")
+    structure = {"entry": "Start", "structure_hash": "a" * 64}
+    recovery = {
+        **structure,
+        "code_artifacts": [],
+        "recoverable": True,
+        "revision": "b" * 64,
+    }
+
+    with patch.object(
+        BackendClient,
+        "_post",
+        return_value={"id": "graph-1"},
+    ) as register:
+        assert client.register_graph_structure(structure)["id"] == "graph-1"
+    register.assert_called_once_with(
+        "/observability/projects/project-1/graphs",
+        {"manifest": structure},
+    )
+
+    with patch.object(
+        BackendClient,
+        "_request_bytes",
+        return_value={"id": "graph-1"},
+    ) as publish:
+        assert (
+            client.publish_graph_recovery("graph-1", recovery)["id"]
+            == "graph-1"
+        )
+    request = publish.call_args
+    assert request.args[:2] == (
+        "PUT",
+        "/observability/projects/project-1/graphs/graph-1/recovery",
+    )
+    assert request.kwargs["content_type"] == "application/json"
 
 
 def test_from_env_still_accepts_explicit_project_id(

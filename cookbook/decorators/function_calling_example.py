@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -41,9 +42,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -51,8 +50,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     # One shared project — both functions register their graphs here.
@@ -71,12 +69,14 @@ def _provider() -> str:
 
 # ── Shared input schema ────────────────────────────────────────────────────
 
+
 class UserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str
 
 
 # ── Function 1: greet ──────────────────────────────────────────────────────
+
 
 class GreetParams(BaseModel):
     """Parameters the model must extract before greet() runs."""
@@ -88,6 +88,7 @@ class GreetParams(BaseModel):
 
 # ── Function 2: summarize ──────────────────────────────────────────────────
 
+
 class SummarizeParams(BaseModel):
     """Parameters the model must extract before summarize() runs."""
 
@@ -96,10 +97,11 @@ class SummarizeParams(BaseModel):
     max_words: int = 30
 
 
-def main() -> None:
-    client = _client_for_example()
-    provider = _provider()
-
+def build_workflow(
+    client: Client | None,
+    provider: str,
+) -> tuple[Callable[..., str], Callable[..., str]]:
+    """Build both decorated workflows without creating a client or running them."""
     hellos = {"en": "Hello", "es": "Hola", "fr": "Bonjour"}
 
     @function_calling(
@@ -126,6 +128,13 @@ def main() -> None:
     )
     def summarize(params: SummarizeParams) -> str:
         return f"Summary of '{params.topic}' in at most {params.max_words} words."
+
+    return greet, summarize
+
+
+def main() -> None:
+    client = _client_for_example()
+    greet, summarize = build_workflow(client, _provider())
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 

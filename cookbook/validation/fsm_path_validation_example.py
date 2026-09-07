@@ -32,21 +32,21 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     NodeContext,
     SchemaNode,
     TextOutput,
     edge_deterministic,
     edge_fallback,
 )
-from neosyntropy.core.validation import (
-    functional_fsm_path_validator,
-    extract_fsm_path,
-)
 from neosyntropy.core.node.schemas import ValidationResult
+from neosyntropy.core.validation import (
+    extract_fsm_path,
+    functional_fsm_path_validator,
+)
 
-TESTS_ENV_PATH = Path(__file__).resolve().parents[3] / "tests" / ".env"
+TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 
@@ -67,25 +67,19 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
 def _provider() -> str:
-    return (
-        os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip()
-        or "gemini-2.5-flash"
-    )
+    return os.environ.get("NEOSYNTROPY_PROVIDER", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
 def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -100,6 +94,7 @@ def _client_for_example() -> Client:
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class QueryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -128,6 +123,7 @@ REQUIRED_STEPS = {"ParseQuery", "GenerateAnswer"}
 # ---------------------------------------------------------------------------
 # FSM builder
 # ---------------------------------------------------------------------------
+
 
 def build_fsm(provider: str) -> FSM:
     parse = SchemaNode(
@@ -175,7 +171,9 @@ def build_fsm(provider: str) -> FSM:
 
         # Optional: also check the answer confidence is acceptable
         answer_output = path.outputs.get("GenerateAnswer", {})
-        confidence = answer_output.get("confidence", 1.0) if isinstance(answer_output, dict) else 1.0
+        confidence = (
+            answer_output.get("confidence", 1.0) if isinstance(answer_output, dict) else 1.0
+        )
         if confidence < 0.3:
             return ValidationResult(
                 valid=False,

@@ -15,8 +15,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     SchemaNode,
     TextOutput,
     edge_deterministic,
@@ -44,9 +44,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -58,8 +56,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -84,15 +81,13 @@ class TicketSummary(BaseModel):
     urgency: str = "normal"
 
 
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    client = _client_for_example()
-
+def build_fsm(provider: str) -> FSM:
+    """Build the schema-extraction graph without performing I/O."""
     extract_ticket = SchemaNode(
         id="ExtractTicket",
         input_schema=TicketInput,
         output_schema=TicketSummary,
-        provider=_provider(),
+        provider=provider,
         prompt=(
             "Extract the customer's name, email address if present, the main topic, "
             "and the urgency level from the message. Use urgency values low, normal, or high."
@@ -104,11 +99,11 @@ def main() -> None:
         is_fallback=True,
         input_schema=TicketInput,
         output_schema=TextOutput,
-        provider=_provider(),
+        provider=provider,
         prompt="Politely refuse messages that are not support tickets.",
     )
 
-    fsm = FSM(
+    return FSM(
         entry=extract_ticket,
         nodes=[extract_ticket, out_of_scope],
         edges=[
@@ -117,6 +112,12 @@ def main() -> None:
             edge_deterministic("OutOfScope", "End"),
         ],
     )
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    client = _client_for_example()
+    fsm = build_fsm(_provider())
 
     result = fsm.run(
         TicketInput(

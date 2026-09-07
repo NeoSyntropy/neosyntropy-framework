@@ -15,8 +15,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from neosyntropy import (
-    Client,
     FSM,
+    Client,
     OpenInput,
     SemanticRouter,
     TextOutput,
@@ -46,9 +46,7 @@ def _load_tests_env() -> None:
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(
-            f"Missing {name}. Copy tests/.env.example to tests/.env and fill values."
-        )
+        raise SystemExit(f"Missing {name}. Copy tests/.env.example to tests/.env and fill values.")
     return value
 
 
@@ -60,8 +58,7 @@ def _client_for_example() -> Client:
     _load_tests_env()
     client = Client(
         api_key=_require_env("NEOSYNTROPY_API_KEY"),
-        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip()
-        or DEFAULT_API_URL,
+        base_url=os.environ.get("NEOSYNTROPY_API_URL", DEFAULT_API_URL).strip() or DEFAULT_API_URL,
     )
     stamp = int(time.time())
     project = client.create_project(
@@ -120,10 +117,8 @@ def out_of_scope(ctx):
     return ctx.result(output={"message": "I can only route billing or shipping requests."})
 
 
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    client = _client_for_example()
-
+def build_fsm(provider: str) -> FSM:
+    """Build the sequential semantic-routing graph without performing I/O."""
     router = SemanticRouter(
         id="SupportIntent",
         input_schema=SupportRequest,
@@ -132,10 +127,10 @@ def main() -> None:
             "shipping": investigate_shipping,
         },
         fallback_node=out_of_scope,
-        provider=_provider(),
+        provider=provider,
     )
 
-    fsm = FSM(
+    return FSM(
         entry=capture_request,
         nodes=[
             capture_request,
@@ -153,6 +148,12 @@ def main() -> None:
             edge_fallback("SupportIntent", "OutOfScope"),
         ],
     )
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    client = _client_for_example()
+    fsm = build_fsm(_provider())
 
     result = fsm.run(
         SupportRequest(text="I need to change my shipping address before the order goes out."),

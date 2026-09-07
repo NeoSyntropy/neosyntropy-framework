@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -10,17 +10,16 @@ class FunctionManifest(BaseModel):
     """Wire shape stored as FunctionManifest on the backend."""
 
     schema_version: int = 1
-    name: Optional[str] = None
+    name: str | None = None
     function_name: str
-    function_module: Optional[str] = None
-    docstring: Optional[str] = None
-    description: Optional[str] = None
+    function_module: str | None = None
+    docstring: str | None = None
+    description: str | None = None
     is_async: bool = False
-    source_code: Optional[str] = None
-    node_count: Optional[int] = None
-    entry: Optional[str] = None
-    input_schema: Optional[Dict[str, Any]] = None
-    decorator: Optional[str] = None
+    node_count: int | None = None
+    entry: str | None = None
+    input_schema: dict[str, Any] | None = None
+    decorator: str | None = None
 
 
 class FunctionEvent(BaseModel):
@@ -29,14 +28,14 @@ class FunctionEvent(BaseModel):
     function_name: str
     event_type: str
     timestamp: datetime
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class FunctionCallEvent(BaseModel):
     """Emitted when a decorated function is called."""
 
     function_name: str
-    duration_ms: Optional[float] = None
+    duration_ms: float | None = None
     status: str
     timestamp: datetime
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None

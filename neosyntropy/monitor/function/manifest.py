@@ -28,12 +28,6 @@ def function_manifest(
     project_id:
         Optional project scope for the manifest.
     """
-    source_code: str | None = None
-    try:
-        source_code = inspect.getsource(func)
-    except (OSError, TypeError):
-        pass
-
     payload: dict[str, Any] = {
         "schema_version": 1,
         "name": func.__name__,
@@ -42,7 +36,6 @@ def function_manifest(
         "docstring": inspect.getdoc(func),
         "description": inspect.getdoc(func),
         "is_async": inspect.iscoroutinefunction(func),
-        "source_code": source_code,
     }
 
     if fsm is not None:

@@ -19,14 +19,15 @@ Rules the manager guarantees:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from .._features import monitor_enabled, remote_execution_enabled
 from ..backend import (
     BackendClient,
     BackendProvider,
+    BackendSemanticRouter,
     Client,
 )
 from ..core.context import ContextBuilder, RunContext
@@ -43,18 +44,14 @@ from ..core.models import (
     ToolCallRecord,
     Topology,
 )
-from ..core.state import StateConflictError, StateManager
-from ..monitor.base import RunObserver, best_effort_call
-from ..monitor.run.observer import BackendTelemetryReporter
-from ..monitor.graph.manifest import (
-    control_graph_manifest,
-    graph_manifest,
-)
-from ..providers.base import Provider, ProviderRegistry
-from ..backend import BackendSemanticRouter
 from ..core.routing.base import Router
 from ..core.routing.preferred import PreferredPathRouter
-
+from ..core.state import StateConflictError, StateManager
+from ..monitor.base import RunObserver, best_effort_call
+from ..monitor.graph.manifest import control_graph_manifest, graph_manifest
+from ..providers.base import Provider, ProviderRegistry
+from ..remote.graph_manifest import graph_manifest_with_bundles
+from ..remote.snapshot import write_graph_snapshot
 from ..tools.core.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
 from .logging import DecisionLogger
@@ -106,7 +103,14 @@ class ControlManager:
     ):
         self.graph = graph
         resolved_backend = _resolve_backend(client, backend=backend)
-        self._backend = resolved_backend
+        self._monitor_enabled = monitor_enabled()
+        self._remote_execution_enabled = remote_execution_enabled()
+        self._monitor_backend = (
+            resolved_backend if self._monitor_enabled else None
+        )
+        self._backend = (
+            resolved_backend if self._remote_execution_enabled else None
+        )
         if telemetry_timeout is None:
             # Prefer the client's telemetry budget so slow DBs don't create
             # orphan runs (run_started commits after the observer timed out).
@@ -130,11 +134,11 @@ class ControlManager:
             for name, provider in backend_providers.items():
                 self.providers.register(name, provider)
         self.tools = tools or ToolRegistry()
-        # When a backend is configured, ControlManager uses the opaque
-        # /control/runs API. Local router remains an offline fallback.
+        # Backend-owned control is an explicit remote-execution feature.
+        # A configured backend may still provide model inference locally.
         self.router = router or (
-            BackendSemanticRouter(resolved_backend)
-            if resolved_backend is not None
+            BackendSemanticRouter(self._backend)
+            if self._backend is not None
             else PreferredPathRouter(graph)
         )
         self.validator = validator or PlanValidator()
@@ -143,15 +147,9 @@ class ControlManager:
         )
         self.context_builder = context_builder or ContextBuilder()
         self.decision_logger = decision_logger
-        self.observer = (
-            observer
-            if observer is not None
-            else (
-                BackendTelemetryReporter(resolved_backend)
-                if resolved_backend is not None
-                else None
-            )
-        )
+        # Monitoring is opt-in. Run observers are only honored when enabled;
+        # graph governance itself is published separately.
+        self.observer = observer if self._monitor_enabled else None
         if telemetry_timeout <= 0:
             raise ValueError("telemetry_timeout must be positive")
         self.telemetry_timeout = telemetry_timeout
@@ -1032,13 +1030,64 @@ class ControlManager:
         return payload
 
     async def _observation_started(self, context: RunContext) -> str | None:
+        if not self._monitor_enabled and not self._remote_execution_enabled:
+            return None
+        structure = graph_manifest(self.graph, self.tools)
+        if self._remote_execution_enabled and self._backend is not None:
+            packaged = graph_manifest_with_bundles(self.graph, self.tools)
+            if packaged.manifest.get("recoverable") is False:
+                issues = packaged.manifest.get("recovery_issues") or []
+                raise RuntimeError(
+                    "graph cannot be registered for remote recovery: "
+                    f"{issues}"
+                )
+            revision = str(packaged.manifest.get("revision") or "")
+            if getattr(self.graph, "_remote_snapshot_revision", None) != revision:
+                graph_record = await asyncio.wait_for(
+                    self._backend.register_graph_structure(structure),
+                    timeout=self.telemetry_timeout,
+                )
+                graph_id = graph_record.get("id")
+                if not graph_id:
+                    raise RuntimeError("graph structure registration failed")
+                await self._backend.upload_code_bundles(packaged.bundles)
+                await asyncio.wait_for(
+                    self._backend.publish_graph_recovery(
+                        str(graph_id), packaged.manifest
+                    ),
+                    timeout=self.telemetry_timeout,
+                )
+                snapshot = await asyncio.wait_for(
+                    self._backend.get_graph_snapshot(str(graph_id)),
+                    timeout=max(
+                        self.telemetry_timeout,
+                        float(
+                            getattr(self._backend, "timeout", 0.0) or 0.0
+                        ),
+                    ),
+                )
+                await asyncio.to_thread(
+                    write_graph_snapshot,
+                    snapshot["graph"],
+                    snapshot["artifacts"],
+                    snapshot["bundles"],
+                )
+                self.graph.graph_id = str(graph_id)
+                self.graph._remote_snapshot_revision = revision
+        elif self._monitor_backend is not None:
+            await best_effort_call(
+                self._monitor_backend.register_graph_structure(structure),
+                timeout=self.telemetry_timeout,
+            )
+        if not self._monitor_enabled:
+            return None
         if self.observer is None:
             return None
         try:
             operation = self.observer.run_started(
                 request_id=context.request_id,
                 initial_state=context.current_state,
-                manifest=graph_manifest(self.graph, self.tools),
+                manifest=structure,
                 input=self._run_input(context),
             )
         except Exception:
