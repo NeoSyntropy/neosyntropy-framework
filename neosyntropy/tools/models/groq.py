@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, List, Optional
 from uuid import uuid4
 
-from neosyntropy.agent import Agent
 from neosyntropy.media import Audio
 from neosyntropy.tools import Toolkit
 from neosyntropy.tools.core.function import ToolResult
@@ -117,7 +116,6 @@ class GroqTools(Toolkit):
 
     def generate_speech(
         self,
-        agent: Agent,
         text_input: str,
     ) -> ToolResult:
         """Generate speech from text using Groq's Text-to-Speech API.

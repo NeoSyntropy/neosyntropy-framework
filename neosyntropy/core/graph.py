@@ -680,8 +680,8 @@ class FSM:
         graph_snapshot: Mapping[str, Any] | None = None
         snapshot_needs_write = False
         raw_artifacts = manifest.get("code_artifacts")
-        from ..monitor._manifest import structure_hash as monitor_structure_hash
-        from ..remote import recovery_revision
+        from ..cloud.monitor._manifest import structure_hash as monitor_structure_hash
+        from ..cloud.remote import recovery_revision
 
         expected_structure_hash = str(manifest.get("structure_hash") or "")
         expected_revision = str(manifest.get("revision") or "")
@@ -699,11 +699,11 @@ class FSM:
         from ..backend import Client as PublicClient
 
         if isinstance(client, PublicClient):
-            from ..remote.snapshot import read_graph_snapshot
+            from ..cloud.remote.snapshot import read_graph_snapshot
 
             graph_snapshot = read_graph_snapshot(record)
         if raw_artifacts:
-            from ..remote import (
+            from ..cloud.remote import (
                 CodeBundleError,
                 decode_code_bundle,
                 load_bundle_callable,
@@ -859,7 +859,7 @@ class FSM:
                     graph_record=record,
                 )
                 snapshot_needs_write = True
-            from ..remote.snapshot import write_graph_snapshot
+            from ..cloud.remote.snapshot import write_graph_snapshot
 
             if snapshot_needs_write:
                 write_graph_snapshot(

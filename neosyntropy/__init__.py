@@ -170,9 +170,9 @@ from .core.schemas import (
 
 from .core.state import StateConflictError, StateManager
 
-from .monitor.base import RunObserver
-from .monitor.run.observer import BackendTelemetryReporter
-from .monitor.graph.manifest import (
+from .cloud.monitor.base import RunObserver
+from .cloud.monitor.run.observer import BackendTelemetryReporter
+from .cloud.monitor.graph.manifest import (
     control_graph_manifest,
     graph_manifest,
 )

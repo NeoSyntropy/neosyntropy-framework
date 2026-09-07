@@ -47,11 +47,11 @@ from ..core.models import (
 from ..core.routing.base import Router
 from ..core.routing.preferred import PreferredPathRouter
 from ..core.state import StateConflictError, StateManager
-from ..monitor.base import RunObserver, best_effort_call
-from ..monitor.graph.manifest import control_graph_manifest, graph_manifest
+from ..cloud.monitor.base import RunObserver, best_effort_call
+from ..cloud.monitor.graph.manifest import control_graph_manifest, graph_manifest
 from ..providers.base import Provider, ProviderRegistry
-from ..remote.graph_manifest import graph_manifest_with_bundles
-from ..remote.snapshot import write_graph_snapshot
+from ..cloud.remote.graph_manifest import graph_manifest_with_bundles
+from ..cloud.remote.snapshot import write_graph_snapshot
 from ..tools.core.registry import ToolNotAllowedError, ToolRegistry
 from .executor import TopologyExecutor
 from .logging import DecisionLogger

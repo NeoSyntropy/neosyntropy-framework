@@ -12,8 +12,8 @@ import pytest
 
 from neosyntropy import FSM
 from neosyntropy.core.models import RoutingPlan
-from neosyntropy.monitor.graph.manifest import graph_manifest
-from neosyntropy.remote import graph_manifest_with_bundles
+from neosyntropy.cloud.monitor.graph.manifest import graph_manifest
+from neosyntropy.cloud.remote import graph_manifest_with_bundles
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDER = "offline/cookbook"

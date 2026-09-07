@@ -35,7 +35,6 @@ class FileSystemKnowledge:
 
     Example:
         ```python
-        # from neosyntropy.agent import Agent  # REMOVED
         from neosyntropy.knowledge.filesystem import FileSystemKnowledge
         from neosyntropy.models.openai import OpenAIChat
 

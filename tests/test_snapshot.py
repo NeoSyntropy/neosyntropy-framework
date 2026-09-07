@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from neosyntropy.remote.snapshot import read_graph_snapshot, write_graph_snapshot
+from neosyntropy.cloud.remote.snapshot import read_graph_snapshot, write_graph_snapshot
 
 
 def _inputs(bundle: bytes = b"\x1f\x8bexact compressed bytes") -> tuple[
@@ -114,7 +114,7 @@ def test_failed_replacement_does_not_prune_stale_blobs(
     stale = target / "artifacts" / f"{'f' * 64}.json.gz"
     stale.write_bytes(b"old")
 
-    import neosyntropy.remote.snapshot as snapshot
+    import neosyntropy.cloud.remote.snapshot as snapshot
 
     real_replace = snapshot.os.replace
     calls = 0

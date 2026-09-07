@@ -128,7 +128,7 @@ class ConceptManifestProvider(Protocol):
 class BackendConceptReporter:
     """Generic reporter for non-run concepts (knowledge, vector_db, workers, …).
 
-    Mirrors :class:`~neosyntropy.monitor.run.observer.BackendTelemetryReporter`
+    Mirrors :class:`~neosyntropy.cloud.monitor.run.observer.BackendTelemetryReporter`
     for run telemetry, but handles the registration of concept manifests that
     exist independently of any individual run (e.g. a knowledge base defined
     once and reused across many runs).

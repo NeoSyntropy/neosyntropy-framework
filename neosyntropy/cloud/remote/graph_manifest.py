@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from neosyntropy.core.graph import FSM
-from neosyntropy.monitor.graph.manifest import (
+from neosyntropy.cloud.monitor.graph.manifest import (
     control_graph_manifest,
     graph_manifest,
 )

@@ -12,7 +12,7 @@ from neosyntropy import (
     function_calling,
     workflow,
 )
-from neosyntropy.monitor.graph.manifest import control_graph_manifest, graph_manifest
+from neosyntropy.cloud.monitor.graph.manifest import control_graph_manifest, graph_manifest
 
 
 class SampleInput(BaseModel):

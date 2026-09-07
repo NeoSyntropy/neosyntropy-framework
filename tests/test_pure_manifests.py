@@ -4,10 +4,10 @@ from typing import Any
 
 from neosyntropy import FSM, SchemaNode, edge_deterministic, edge_fallback
 from neosyntropy.core.node.base import Node
-from neosyntropy.monitor.function.manifest import function_manifest
-from neosyntropy.monitor.graph.manifest import control_graph_manifest, graph_manifest
-from neosyntropy.monitor.node.manifest import node_manifest
-from neosyntropy.remote import graph_manifest_with_bundles, node_manifest_with_bundles
+from neosyntropy.cloud.monitor.function.manifest import function_manifest
+from neosyntropy.cloud.monitor.graph.manifest import control_graph_manifest, graph_manifest
+from neosyntropy.cloud.monitor.node.manifest import node_manifest
+from neosyntropy.cloud.remote import graph_manifest_with_bundles, node_manifest_with_bundles
 
 
 def _handler(ctx: Any) -> Any:

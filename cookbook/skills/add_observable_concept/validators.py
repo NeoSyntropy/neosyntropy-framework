@@ -134,7 +134,7 @@ def validate_no_collision(defn: "ConceptDefinition") -> list[str]:
 
     checks: list[tuple[Path, str]] = [
         (
-            defn.framework_repo_path / "neosyntropy" / "monitor" / defn.concept / "manifest.py",
+            defn.framework_repo_path / "neosyntropy" / "cloud" / "monitor" / defn.concept / "manifest.py",
             "framework manifest.py",
         ),
         (

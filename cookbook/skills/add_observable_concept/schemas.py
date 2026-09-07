@@ -141,9 +141,9 @@ class WorkflowResult(BaseModel):
     def checklist(self) -> list[str]:
         """Return a markdown-style checklist showing which steps were generated."""
         step_labels = {
-            1:  f"monitor/{{concept}}/manifest.py created",
-            2:  f"monitor/{{concept}}/schemas.py filled in",
-            3:  f"monitor/{{concept}}/observer.py updated",
+            1:  f"cloud/monitor/{{concept}}/manifest.py created",
+            2:  f"cloud/monitor/{{concept}}/schemas.py filled in",
+            3:  f"cloud/monitor/{{concept}}/observer.py updated",
             4:  f"@workflow / @function_calling accept {{concept}}= param",
             5:  f"src/models/{{concept}}.py created",
             6:  f"src/models/__init__.py updated",

@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Any, Dict
 
 from neosyntropy.backend import BackendClient
-from neosyntropy.monitor.base import (
+from neosyntropy.cloud.monitor.base import (
     MonitorObserver,
     AsyncMonitorObserver,
     RunObserver as TelemetryRunObserver,

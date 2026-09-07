@@ -129,7 +129,7 @@ def _build_knowledge_manifests(
     knowledge: Any,
 ) -> list[dict[str, Any]]:
     """Return serialisable manifests for one or more Knowledge instances."""
-    from neosyntropy.monitor.knowledge.manifest import knowledge_manifest
+    from neosyntropy.cloud.monitor.knowledge.manifest import knowledge_manifest
 
     if knowledge is None:
         return []
@@ -186,7 +186,7 @@ def function_calling(
 
         # Register attached concept manifests at decoration time.
         if client and project_id:
-            from neosyntropy.monitor.function.manifest import function_manifest
+            from neosyntropy.cloud.monitor.function.manifest import function_manifest
             _register_concept_fire_and_forget(
                 client, project_id, "functions",
                 function_manifest(func, fsm=fsm),
@@ -308,7 +308,7 @@ def workflow(
 
         # Register attached concept manifests at decoration time.
         if client and project_id:
-            from neosyntropy.monitor.function.manifest import function_manifest
+            from neosyntropy.cloud.monitor.function.manifest import function_manifest
             _register_concept_fire_and_forget(
                 client, project_id, "functions",
                 function_manifest(func, fsm=fsm),

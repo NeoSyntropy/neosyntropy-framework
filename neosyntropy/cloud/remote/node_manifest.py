@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from neosyntropy.monitor.node.manifest import node_manifest
+from neosyntropy.cloud.monitor.node.manifest import node_manifest
 
 from .bundles import dependency_lock, recovery_revision, runtime_compatibility
 from .extractor import extract_graph_code

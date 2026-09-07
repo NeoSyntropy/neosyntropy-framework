@@ -1,5 +1,5 @@
 from typing import Any, Dict
-from neosyntropy.monitor.base import MonitorObserver, AsyncMonitorObserver
+from neosyntropy.cloud.monitor.base import MonitorObserver, AsyncMonitorObserver
 
 class GraphObserver(MonitorObserver):
     def __init__(self, backend_url: str = None):

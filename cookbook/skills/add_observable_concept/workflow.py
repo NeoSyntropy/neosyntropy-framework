@@ -86,11 +86,11 @@ def render(template: str, defn: ConceptDefinition) -> str:
 # ---------------------------------------------------------------------------
 
 def _step1_framework_manifest(defn: ConceptDefinition) -> list[GeneratedFile]:
-    """Step 1: neosyntropy/monitor/{concept}/manifest.py  (CREATE)"""
+    """Step 1: neosyntropy/cloud/monitor/{concept}/manifest.py  (CREATE)"""
     tmpl = _load_template("framework_manifest.py.tmpl")
     path = (
         defn.framework_repo_path
-        / "neosyntropy" / "monitor" / defn.concept / "manifest.py"
+        / "neosyntropy" / "cloud" / "monitor" / defn.concept / "manifest.py"
     )
     return [GeneratedFile(
         path=path,
@@ -102,11 +102,11 @@ def _step1_framework_manifest(defn: ConceptDefinition) -> list[GeneratedFile]:
 
 
 def _step2_framework_schemas(defn: ConceptDefinition) -> list[GeneratedFile]:
-    """Step 2: neosyntropy/monitor/{concept}/schemas.py  (CREATE/OVERWRITE)"""
+    """Step 2: neosyntropy/cloud/monitor/{concept}/schemas.py  (CREATE/OVERWRITE)"""
     tmpl = _load_template("framework_schemas.py.tmpl")
     path = (
         defn.framework_repo_path
-        / "neosyntropy" / "monitor" / defn.concept / "schemas.py"
+        / "neosyntropy" / "cloud" / "monitor" / defn.concept / "schemas.py"
     )
     return [GeneratedFile(
         path=path,
@@ -118,11 +118,11 @@ def _step2_framework_schemas(defn: ConceptDefinition) -> list[GeneratedFile]:
 
 
 def _step3_framework_observer(defn: ConceptDefinition) -> list[GeneratedFile]:
-    """Step 3: neosyntropy/monitor/{concept}/observer.py  (OVERWRITE stub)"""
+    """Step 3: neosyntropy/cloud/monitor/{concept}/observer.py  (OVERWRITE stub)"""
     tmpl = _load_template("framework_observer.py.tmpl")
     path = (
         defn.framework_repo_path
-        / "neosyntropy" / "monitor" / defn.concept / "observer.py"
+        / "neosyntropy" / "cloud" / "monitor" / defn.concept / "observer.py"
     )
     return [GeneratedFile(
         path=path,
@@ -134,10 +134,10 @@ def _step3_framework_observer(defn: ConceptDefinition) -> list[GeneratedFile]:
 
 
 def _step3_framework_init(defn: ConceptDefinition) -> list[GeneratedFile]:
-    """Step 3 companion: neosyntropy/monitor/{concept}/__init__.py  (CREATE if missing)"""
+    """Step 3 companion: neosyntropy/cloud/monitor/{concept}/__init__.py  (CREATE if missing)"""
     path = (
         defn.framework_repo_path
-        / "neosyntropy" / "monitor" / defn.concept / "__init__.py"
+        / "neosyntropy" / "cloud" / "monitor" / defn.concept / "__init__.py"
     )
     if path.exists():
         return []
@@ -146,7 +146,7 @@ def _step3_framework_init(defn: ConceptDefinition) -> list[GeneratedFile]:
         content="",
         action="create",
         step=3,
-        description=f"Package init for neosyntropy.monitor.{defn.concept}",
+        description=f"Package init for neosyntropy.cloud.monitor.{defn.concept}",
     )]
 
 
@@ -162,7 +162,7 @@ def _step4_decorator_snippet(defn: ConceptDefinition) -> list[GeneratedFile]:
             obj: Any,
         ) -> list[dict[str, Any]]:
             \"\"\"Return serialisable manifests for one or more {defn.concept_label} instances.\"\"\"
-            from neosyntropy.monitor.{defn.concept}.manifest import {defn.concept}_manifest
+            from neosyntropy.cloud.monitor.{defn.concept}.manifest import {defn.concept}_manifest
 
             if obj is None:
                 return []

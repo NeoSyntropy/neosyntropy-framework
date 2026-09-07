@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from neosyntropy.monitor._manifest import structure_hash
+from neosyntropy.cloud.monitor._manifest import structure_hash
 
 if TYPE_CHECKING:
     from neosyntropy.core.node import Node

@@ -1,5 +1,5 @@
 from typing import Any, Dict
-from neosyntropy.monitor.base import MonitorObserver, AsyncMonitorObserver
+from neosyntropy.cloud.monitor.base import MonitorObserver, AsyncMonitorObserver
 
 class FunctionObserver(MonitorObserver):
     def __init__(self, backend_url: str = None):

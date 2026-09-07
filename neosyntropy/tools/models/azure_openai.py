@@ -4,7 +4,6 @@ from uuid import uuid4
 
 from requests import post
 
-from neosyntropy.agent import Agent
 from neosyntropy.media import Image
 from neosyntropy.tools import Toolkit
 from neosyntropy.tools.core.function import ToolResult
@@ -99,7 +98,6 @@ class AzureOpenAITools(Toolkit):
 
     def generate_image(
         self,
-        agent: Agent,
         prompt: str,
         n: int = 1,
         size: Optional[Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"]] = "1024x1024",
@@ -108,7 +106,6 @@ class AzureOpenAITools(Toolkit):
         """Generate an image using Azure OpenAI image generation.
 
         Args:
-            agent: The agent instance for adding images
             prompt: Text description of the desired image
             n: Number of images to generate (default: 1).
                 Note: dall-e-3 only supports n=1, while dall-e-2 supports multiple images.

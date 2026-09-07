@@ -3,7 +3,6 @@ from os import getenv
 from typing import Optional
 from uuid import uuid4
 
-from neosyntropy.agent import Agent
 from neosyntropy.media import Image
 from neosyntropy.models.nebius import Nebius
 from neosyntropy.tools import Toolkit
@@ -66,13 +65,11 @@ class NebiusTools(Toolkit):
 
     def generate_image(
         self,
-        agent: Agent,
         prompt: str,
     ) -> ToolResult:
         """Generate images based on a text prompt using Nebius Token Factory.
 
         Args:
-            agent: The agent instance for adding images
             prompt: The text prompt to generate images from.
 
         Returns:

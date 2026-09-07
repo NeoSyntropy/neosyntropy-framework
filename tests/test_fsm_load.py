@@ -21,8 +21,8 @@ from neosyntropy import (
     edge_fallback,
 )
 from neosyntropy.backend import BackendClient, Client
-from neosyntropy.monitor.graph.manifest import graph_manifest
-from neosyntropy.remote import graph_manifest_with_bundles, load_bundle_callable
+from neosyntropy.cloud.monitor.graph.manifest import graph_manifest
+from neosyntropy.cloud.remote import graph_manifest_with_bundles, load_bundle_callable
 
 
 @pytest.fixture(autouse=True)
@@ -153,8 +153,8 @@ def test_from_manifest_hydrates_python_handler() -> None:
 
 
 def test_load_fetches_manifest_and_preserves_graph_id() -> None:
-    from neosyntropy.monitor._manifest import structure_hash
-    from neosyntropy.remote import recovery_revision
+    from neosyntropy.cloud.monitor._manifest import structure_hash
+    from neosyntropy.cloud.remote import recovery_revision
 
     manifest = {
         "schema_version": 3,
@@ -608,8 +608,8 @@ def test_bundle_hydration_restores_local_modules_and_typed_bindings() -> None:
 
 
 def test_load_rejects_incompatible_runtime_before_downloading_code() -> None:
-    from neosyntropy.monitor._manifest import structure_hash
-    from neosyntropy.remote import recovery_revision
+    from neosyntropy.cloud.monitor._manifest import structure_hash
+    from neosyntropy.cloud.remote import recovery_revision
 
     structure = {
         "schema_version": 3,

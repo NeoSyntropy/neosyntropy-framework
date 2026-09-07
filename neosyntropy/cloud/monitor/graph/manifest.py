@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from neosyntropy.core.graph import FSM
-from neosyntropy.monitor._manifest import structure_hash
-from neosyntropy.monitor.node.manifest import _node_structure
+from neosyntropy.cloud.monitor._manifest import structure_hash
+from neosyntropy.cloud.monitor.node.manifest import _node_structure
 
 if TYPE_CHECKING:
     from neosyntropy.tools.core.registry import ToolRegistry

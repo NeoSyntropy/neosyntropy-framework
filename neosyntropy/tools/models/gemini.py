@@ -4,7 +4,6 @@ from os import getenv
 from typing import Any, Optional
 from uuid import uuid4
 
-from neosyntropy.agent import Agent
 from neosyntropy.media import Image, Video
 from neosyntropy.tools import Toolkit
 from neosyntropy.tools.core.function import ToolResult
@@ -75,7 +74,6 @@ class GeminiTools(Toolkit):
 
     def generate_image(
         self,
-        agent: Agent,
         prompt: str,
     ) -> ToolResult:
         """Generate images based on a text prompt using Google Imagen.
@@ -132,7 +130,6 @@ class GeminiTools(Toolkit):
 
     def generate_video(
         self,
-        agent: Agent,
         prompt: str,
     ) -> ToolResult:
         """Generate a video based on a text prompt.

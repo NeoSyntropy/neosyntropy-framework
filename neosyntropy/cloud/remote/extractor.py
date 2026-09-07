@@ -1,6 +1,6 @@
 """Standalone callable, node and graph code extraction.
 
-This module deliberately has no dependency on :mod:`neosyntropy.monitor`.
+This module deliberately has no dependency on :mod:`neosyntropy.cloud.monitor`.
 """
 
 from __future__ import annotations

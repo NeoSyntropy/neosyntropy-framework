@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from neosyntropy.remote.extractor import (
+from neosyntropy.cloud.remote.extractor import (
     _build_vfs,
     _classify_import,
     _find_project_root,
@@ -567,7 +567,7 @@ def _fsm_with_nodes(*nodes: Any) -> MagicMock:
 
 class TestManifestRoundTrip:
     def test_handler_code_is_replaced_by_source_free_artifact_ref(self, tmp_path: Path) -> None:
-        from neosyntropy.remote import graph_manifest_with_bundles, node_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles, node_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         src = "def process(ctx): return ctx\n"
@@ -609,7 +609,7 @@ class TestManifestRoundTrip:
 
     def test_schema_node_without_tools_has_no_handler_code(self) -> None:
         from neosyntropy.core.node.base import Node
-        from neosyntropy.monitor.graph.manifest import graph_manifest
+        from neosyntropy.cloud.monitor.graph.manifest import graph_manifest
 
         schema_node = Node(
             id="InferResult",
@@ -625,7 +625,7 @@ class TestManifestRoundTrip:
 
     def test_reasoning_node_sends_tool_artifact_ref(self, tmp_path: Path) -> None:
         from neosyntropy.core.node.reasoning import ReasoningNode
-        from neosyntropy.remote import node_manifest_with_bundles
+        from neosyntropy.cloud.remote import node_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         tool_src = "def lookup_order(order_id): return order_id\n"
@@ -718,7 +718,7 @@ class TestContentAddressedBundles:
     def test_gzip_bundle_and_digest_are_deterministic(self, tmp_path: Path) -> None:
         import gzip
 
-        from neosyntropy.remote import bundle_sha256, extract_callable_artifact
+        from neosyntropy.cloud.remote import bundle_sha256, extract_callable_artifact
 
         (tmp_path / "pyproject.toml").write_text("")
         src = "def handler(ctx):\n    return ctx\n"
@@ -741,7 +741,7 @@ class TestContentAddressedBundles:
     def test_manifest_deduplicates_handler_and_tool_bundle(self, tmp_path: Path) -> None:
         from types import SimpleNamespace
 
-        from neosyntropy.remote import graph_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         src = "def shared(ctx):\n    return ctx\n"
@@ -787,7 +787,7 @@ class TestContentAddressedBundles:
     def test_deterministic_edge_guard_has_stable_ref(self, tmp_path: Path) -> None:
         from neosyntropy.core.edge import edge_deterministic
         from neosyntropy.core.node.base import Node
-        from neosyntropy.remote import graph_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         src = "def allows(state):\n    return state.get('ok', False)\n"
@@ -812,7 +812,7 @@ class TestContentAddressedBundles:
         assert first.bundles == second.bundles
 
     def test_functional_node_preserves_original_and_adapter(self, tmp_path: Path) -> None:
-        from neosyntropy.remote import graph_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         src = (
@@ -848,7 +848,7 @@ class TestContentAddressedBundles:
 class TestManifestV3:
     def test_schema_node_func_provider_and_runtime_metadata(self, tmp_path: Path) -> None:
         from neosyntropy.core.node import SchemaNode
-        from neosyntropy.remote import node_manifest_with_bundles
+        from neosyntropy.cloud.remote import node_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         fn = _make_handler_mod(
@@ -886,7 +886,7 @@ class TestManifestV3:
 
         from neosyntropy.core.node.base import Node
         from neosyntropy.core.routing import DeterministicRouter
-        from neosyntropy.remote import graph_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles
 
         (tmp_path / "pyproject.toml").write_text("")
         source = (
@@ -948,7 +948,7 @@ class TestManifestV3:
         from neosyntropy.core.group import Group
         from neosyntropy.core.node.base import Node
         from neosyntropy.core.routing import SemanticRouter
-        from neosyntropy.monitor.graph.manifest import graph_manifest
+        from neosyntropy.cloud.monitor.graph.manifest import graph_manifest
 
         target = Node(
             id="Target",
@@ -1002,7 +1002,7 @@ class TestManifestV3:
     def test_required_unextractable_handler_is_not_publishable(self) -> None:
         from neosyntropy import FSM, SchemaNode, edge_deterministic, edge_fallback
         from neosyntropy.core.node.base import Node
-        from neosyntropy.remote import graph_manifest_with_bundles, node_manifest_with_bundles
+        from neosyntropy.cloud.remote import graph_manifest_with_bundles, node_manifest_with_bundles
 
         node = Node(
             id="Builtin",
