@@ -95,6 +95,12 @@ The result is an AI workflow where **models provide intelligence where it is nee
 Use a `Node`, a router, and a `Group` to build controlled workflows.
 `ControlManager` keeps every model proposal inside a fail-closed graph.
 
+Each model-backed concept can start with a Foundation Model and, after enough
+evaluated iterations, be tuned in NeoSyntropy into a small, task-specific
+model. The company retains control of the result and the full lifecycle—
+operation, validation, evaluation, and outputs—rather than ceding ownership
+to an outside vendor such as Anthropic or OpenAI.
+
 | Concept | Role |
 |---|---|
 | [`Node`](docs/concepts-explained.md#2-node--node--executable-capability) | Executable capability (Python handler or provider-backed). [`reasoning`](cookbook/fsm/reasoning_node_prompt_tools_example.py) | [`schema extraction`](cookbook/fsm/schema_node_example.py) | [`validation`](neosyntropy/core/node/validation.py) |
