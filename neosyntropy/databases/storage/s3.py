@@ -19,6 +19,88 @@ from neosyntropy.utils.log import log_error, log_info
 from neosyntropy.utils.string import generate_id
 
 
+class S3Object:
+    """Reference to an object in an S3 bucket."""
+
+    def __init__(
+        self,
+        bucket_name: str,
+        name: str,
+        region: str | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+    ):
+        self.bucket_name = bucket_name
+        self.name = name
+        self.region = region
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
+
+    @property
+    def uri(self) -> str:
+        return f"s3://{self.bucket_name}/{self.name}"
+
+    def get_resource(self):
+        try:
+            import boto3
+        except ImportError as exc:
+            raise ImportError(
+                "The `boto3` package is not installed. Install it with `pip install boto3`."
+            ) from exc
+
+        session = boto3.Session(
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            region_name=self.region,
+        )
+        return session.resource("s3").Object(self.bucket_name, self.name)
+
+    def download(self, destination: Path) -> None:
+        self.get_resource().download_file(str(destination))
+
+
+class S3Bucket:
+    """Reference to an S3 bucket and its connection settings."""
+
+    def __init__(
+        self,
+        name: str,
+        region: str | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+    ):
+        self.name = name
+        self.region = region
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
+
+    def object(self, name: str) -> S3Object:
+        return S3Object(
+            bucket_name=self.name,
+            name=name,
+            region=self.region,
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+        )
+
+    def get_objects(self, prefix: str | None = None) -> list[S3Object]:
+        try:
+            import boto3
+        except ImportError as exc:
+            raise ImportError(
+                "The `boto3` package is not installed. Install it with `pip install boto3`."
+            ) from exc
+
+        session = boto3.Session(
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            region_name=self.region,
+        )
+        objects = session.resource("s3").Bucket(self.name).objects
+        summaries = objects.filter(Prefix=prefix) if prefix is not None else objects.all()
+        return [self.object(summary.key) for summary in summaries]
+
+
 class S3Loader(BaseLoader):
     """Loader for S3 content."""
 
@@ -76,9 +158,6 @@ class S3Loader(BaseLoader):
 
         Note: Uses sync boto3 calls as boto3 doesn't have an async API.
         """
-        from neosyntropy.cloud.aws.s3.bucket import S3Bucket
-        from neosyntropy.cloud.aws.s3.object import S3Object
-
         remote_content: S3Content = cast(S3Content, content.remote_content)
         s3_config = self._validate_s3_config(content, config)
 
@@ -99,7 +178,7 @@ class S3Loader(BaseLoader):
         objects_to_read: List[S3Object] = []
         if bucket is not None:
             if remote_content.key is not None:
-                _object = S3Object(bucket_name=bucket.name, name=remote_content.key)
+                _object = bucket.object(remote_content.key)
                 objects_to_read.append(_object)
             elif remote_content.object is not None:
                 objects_to_read.append(remote_content.object)
@@ -179,9 +258,6 @@ class S3Loader(BaseLoader):
         config: Optional[BaseStorageConfig] = None,
     ):
         """Load content from AWS S3 (sync)."""
-        from neosyntropy.cloud.aws.s3.bucket import S3Bucket
-        from neosyntropy.cloud.aws.s3.object import S3Object
-
         remote_content: S3Content = cast(S3Content, content.remote_content)
         s3_config = self._validate_s3_config(content, config)
 
@@ -199,7 +275,7 @@ class S3Loader(BaseLoader):
         objects_to_read: List[S3Object] = []
         if bucket is not None:
             if remote_content.key is not None:
-                _object = S3Object(bucket_name=bucket.name, name=remote_content.key)
+                _object = bucket.object(remote_content.key)
                 objects_to_read.append(_object)
             elif remote_content.object is not None:
                 objects_to_read.append(remote_content.object)

@@ -92,18 +92,17 @@ The result is an AI workflow where **models provide intelligence where it is nee
 
 ## Core concepts
 
-Start with decorators when adding AI to an ordinary function. Use a `Node`, a
-router, and a `Group` when the operation needs multiple controlled steps.
+Use a `Node`, a router, and a `Group` to build controlled workflows.
 `ControlManager` keeps every model proposal inside a fail-closed graph.
 
 | Concept | Role |
 |---|---|
-| [`@function_calling` / `@workflow`](cookbook/decorators) | Turn a typed Python function into a controlled model call: predict validated parameters directly, or gather evidence in explicit reasoning steps first |
 | [`Node`](docs/concepts-explained.md#2-node--node--executable-capability) | Executable capability (Python handler or provider-backed). [`reasoning`](cookbook/fsm/reasoning_node_prompt_tools_example.py) | [`schema extraction`](cookbook/fsm/schema_node_example.py) | [`validation`](neosyntropy/core/node/validation.py) |
 | Router | [`semantic`](cookbook/fsm/semantic_router_sequential_example.py): model picks among labeled targets, still validated against the graph. [`deterministic`](docs/concepts-explained.md#7-deterministicrouter--hard-rules): first matching `(predicate, target)` rule wins |
 | [`Group`](docs/concepts-explained.md#9-group--named-subgraph-optional) | Named node collection; optional `entry`, internal routers, and `add_edge` that compile into the FSM |
 | [`Validation`](cookbook/validation) | Gate any FSM level: validate a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/validation/node_validation_example.py) | [`group`](cookbook/validation/group_path_validation_example.py) | [`fsm`](cookbook/validation/fsm_path_validation_example.py) |
 | [`KPI`](cookbook/kpi) | Score any FSM level without gating the run: a single node output, a path through a `Group`, or the entire FSM run. [`node`](cookbook/kpi/node_kpi_example.py) | [`fsm`](cookbook/kpi/fsm_path_kpi_example.py) |
+| [Decorators](cookbook/decorators) | Higher-level concepts built on nodes: `@function_calling` predicts validated parameters for a typed Python function, while `@workflow` gathers evidence in explicit reasoning steps first |
 
 Each concept explained (what / when / example):
 [`docs/concepts-explained.md`](docs/concepts-explained.md) |

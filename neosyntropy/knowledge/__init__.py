@@ -1,12 +1,5 @@
-from neosyntropy.knowledge.filesystem import FileSystemKnowledge
-from neosyntropy.knowledge.knowledge import Knowledge
-from neosyntropy.knowledge.protocol import (
-    KnowledgeProtocol,
-    KnowledgeRetrievalProtocol,
-    KnowledgeTransformProtocol,
-)
-
-from neosyntropy.knowledge.transform import transform, Input, Output
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "Knowledge",
@@ -20,4 +13,22 @@ __all__ = [
 ]
 
 
+def __getattr__(name: str) -> Any:
+    if name == "Knowledge":
+        from neosyntropy.knowledge.knowledge import Knowledge
+
+        return Knowledge
+    if name == "FileSystemKnowledge":
+        from neosyntropy.knowledge.filesystem import FileSystemKnowledge
+
+        return FileSystemKnowledge
+    if name in {
+        "KnowledgeProtocol",
+        "KnowledgeTransformProtocol",
+        "KnowledgeRetrievalProtocol",
+    }:
+        return getattr(import_module("neosyntropy.knowledge.protocol"), name)
+    if name in {"transform", "Input", "Output"}:
+        return getattr(import_module("neosyntropy.knowledge.transform"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

@@ -1,8 +1,10 @@
-from dataclasses import dataclass
-from typing import Optional, Union
+from __future__ import annotations
 
-from neosyntropy.cloud.aws.s3.bucket import S3Bucket
-from neosyntropy.cloud.aws.s3.object import S3Object
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional, Union
+
+if TYPE_CHECKING:
+    from neosyntropy.databases.storage.s3 import S3Bucket, S3Object
 
 
 @dataclass
@@ -31,9 +33,6 @@ class S3Content:
             raise ValueError("Either bucket_name or bucket must be provided, not both")
         if sum(x is not None for x in [key, object, prefix]) > 1:
             raise ValueError("Only one of key, object, or prefix should be provided")
-
-        if self.bucket_name is not None:
-            self.bucket = S3Bucket(name=self.bucket_name)
 
     def get_config(self):
         return {
