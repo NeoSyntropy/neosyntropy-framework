@@ -27,3 +27,8 @@ python cookbook/fsm/python_node_example.py
 
 If the local GPU inference service is unavailable, set `NEOSYNTROPY_PROVIDER`
 to a hosted model such as `gemini-2.5-flash`.
+
+To publish recoverable graphs and write local snapshots, set
+`NEO_REMOTE_EXECUTION=TRUE` (literal uppercase) or run
+`python scripts/run_remote_cookbooks.py`. See
+[`docs/remote-execution.md`](../../docs/remote-execution.md).

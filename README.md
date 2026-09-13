@@ -168,14 +168,23 @@ project = client.create_project(
 print(project["id"])   # pass this as project_id= in subsequent Client(...) calls
 ```
 
-Pass `base_url=` to target a self-hosted or local backend:
+Pass `base_url=` to target a self-hosted or local backend. The value
+**must** include a scheme (`https://` or `http://`):
 
 ```python
 client = Client(
     api_key="your-api-key",
-    base_url="api.neosyntropy.com",   # or localhost in case your orgnization deploy neosyntropy in vpc. 
+    base_url="https://api.neosyntropy.com",  # or http://127.0.0.1:8000 in a VPC
 )
 ```
+
+A bare host such as `api.neosyntropy.com` raises
+`base_url must be an HTTP or HTTPS URL`.
+
+Backend **inference** uses these credentials. Backend-owned **control**,
+graph recovery, and `FSM.load` also require `NEO_REMOTE_EXECUTION=TRUE`
+(literal uppercase). Structure-only telemetry uses
+`NEOSYNTROPY_MONITOR=TRUE`. See [`docs/remote-execution.md`](docs/remote-execution.md).
 
 ## Quickstart
 
@@ -245,6 +254,7 @@ Every cycle returns a `RunResult` with a full `AuditRecord`. A rejection is a
 normal outcome: `result.rejected` is set and the audit explains why.
 
 More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) |
+[`docs/remote-execution.md`](docs/remote-execution.md) |
 [`examples/refund_workflow.py`](examples/refund_workflow.py) |
 [`cookbook/decorators`](cookbook/decorators)
 

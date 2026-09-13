@@ -102,8 +102,15 @@ result = fsm.run(
 |---|---|---|
 | `request` (positional) | Typed run input — validated against `entry.input_schema` at run start. Immutable for the whole run. | `ctx.input` |
 | `state=` | Mutable workflow bag — accumulates `state_updates` from every committed node. Pre-populate with auth context, ids, flags. | `ctx.state` |
-| `client=` | `Client(api_key=..., project_id=...)` — the backend owns candidate selection, routing, plan validation, and commits. Omit to route locally. | — |
+| `client=` | `Client(api_key=..., project_id=..., base_url="https://…")` — backend inference for provider-backed nodes. Backend-owned **control** also needs `NEO_REMOTE_EXECUTION=TRUE`. Omit to route locally. | — |
 | `tools=` | `ToolRegistry` — nodes can only call tools declared in their `tools=(...)` **and** present here. Fail-closed. | `ctx.tools.invoke(...)` |
+| `until_end=` | Default `True`: loop until `End` or rejection. `False`: one control cycle. | — |
+| `max_cycles=` | Cap on the `until_end` loop (default `32`). Exceeding it raises `RuntimeError`. | — |
+
+`await fsm.arun(...)` is the async form. `ControlManager.run()` cannot be
+called from a running event loop — use `await ControlManager.arun(...)`.
+`fsm.run_batch` / `fsm.arun_batch` run many requests with a worker cap
+(`batch_size`, default 50).
 
 > [!NOTE]
 > `input` is evidence, not authority. A request carrying `refund_approved=True` does not
@@ -1109,7 +1116,7 @@ FSM:
 ```python
 billing = Group(name="billing")
 
-@billing.node(id="ValidateCard", output_schema=EmptyOutput)
+@billing.node(id="ValidateCard", input_schema=OpenInput, output_schema=EmptyOutput)
 def validate(ctx):
     return ctx.result(output={}, state_updates={"card_valid": True})
 
@@ -1188,30 +1195,41 @@ print(result.final_state)
 print(result.audit.committed_transitions)
 ```
 
-With backend credentials configured, the **backend owns** candidate selection,
-routing, plan validation, and commits. The client defines the graph, runs local
-handlers, and submits results. Responses never include topology, candidates,
-execution plans, providers, or model names.
+A configured `Client` is **not** enough for backend-owned control. Without
+`NEO_REMOTE_EXECUTION=TRUE`, `ControlManager` keeps the local
+`PreferredPathRouter` and only uses the backend as an inference provider
+for `SchemaNode` / `ReasoningNode`. With the flag, the backend owns
+candidate selection, routing, plan validation, and commits; the client
+runs local handlers and submits results. Responses never include topology,
+candidates, execution plans, providers, or model names.
 
-Set `NEOSYNTROPY_API_URL` with `NEOSYNTROPY_API_KEY` + `NEOSYNTROPY_PROJECT_ID`
-(or `NEOSYNTROPY_ACCESS_TOKEN`). `ControlManager(graph)` discovers them
-automatically.
+Set `NEOSYNTROPY_API_URL` (full `http(s)://…` URL) with
+`NEOSYNTROPY_API_KEY` + optional `NEOSYNTROPY_PROJECT_ID` (or
+`NEOSYNTROPY_ACCESS_TOKEN`). `ControlManager(graph)` discovers them via
+`BackendClient.from_env()`.
+
+Operational flags, `FSM.load`, snapshots, and extractability constraints:
+[`remote-execution.md`](remote-execution.md).
 
 ---
 
 ## 12. Observability
 
-When a backend client is configured, `ControlManager` reports lifecycle events
-to the telemetry API. Telemetry is bounded and best-effort: an unavailable or
-slow observer never changes execution, validation, commits, or raised errors.
+Run observers are honored only when monitoring is on
+(`NEOSYNTROPY_MONITOR=TRUE`, or implied by `NEO_REMOTE_EXECUTION=TRUE`).
+Otherwise `ControlManager(..., observer=...)` is ignored. Telemetry is
+bounded and best-effort: an unavailable or slow observer never changes
+execution, validation, commits, or raised errors.
 
 - **Default:** capture run/step payloads so the console can replay the FSM
 - **`capture_payloads=False`:** lifecycle + visualization manifest only
   (schemas, node ids, prompts, edges — not handlers, state, or run input)
-- **`graph_manifest(graph)`:** inspect the manifest payload
-- Custom observers: `ControlManager(graph, observer=...)`
+- **`graph_manifest(graph)`:** inspect the structure-only manifest payload
+- Custom observers: `ControlManager(graph, observer=...)` *and* the monitor flag
 
-See [`examples/observability.py`](../examples/observability.py).
+Monitor-only mode registers graph **structure** (no code bundles). Remote
+execution also publishes recoverable bundles. See
+[`remote-execution.md`](remote-execution.md).
 
 ---
 
@@ -1369,6 +1387,7 @@ Example shape for a support desk:
 ## Related docs
 
 - [`concepts.md`](concepts.md) — methodology, fail-closed gates, SLM wire contracts
+- [`remote-execution.md`](remote-execution.md) — feature flags, `FSM.load`, snapshots, pitfalls
 - Site concepts: [nodes](https://docs.neosyntropy.com/concepts/nodes) ·
   [model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) ·
   [routers](https://docs.neosyntropy.com/concepts/routers) ·
