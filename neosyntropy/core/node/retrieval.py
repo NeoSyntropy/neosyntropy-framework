@@ -7,6 +7,7 @@ writes the retrieved documents back into state under ``output_key``.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..models import NodeResult
@@ -59,7 +60,18 @@ def retrieval_node(
             "Either 'knowledge' or 'vector_db' must be provided to retrieval_node."
         )
 
-    def handler(state: dict[str, Any]) -> NodeResult:
+    def handler(ctx: Any) -> NodeResult:
+        # TopologyExecutor always passes NodeContext. Direct unit-test
+        # callers may still pass a raw state dict.
+        state = ctx.state if hasattr(ctx, "state") else ctx
+        if not isinstance(state, Mapping):
+            return NodeResult(
+                node_id=id,
+                status="failed",
+                error="Retrieval handler expected NodeContext or a state mapping.",
+                state_updates={},
+            )
+
         query = state.get(query_key)
         if not query:
             return NodeResult(
