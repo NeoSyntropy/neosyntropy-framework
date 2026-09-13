@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tests.scenarios import DELIVERIES_ROOT, SCENARIOS_ROOT, scenario_ids
+from tests.scenarios.cookbook_support import SPECS, cookbook_example_paths
 
 
 def test_graph_md_names_every_scenario() -> None:
@@ -27,3 +28,19 @@ def test_every_scenario_file_declares_matching_id() -> None:
     for scenario_id in scenario_ids():
         text = (SCENARIOS_ROOT / scenario_id / "scenario.py").read_text(encoding="utf-8")
         assert f'SCENARIO_ID = "{scenario_id}"' in text
+
+
+def test_every_cookbook_example_has_a_scenario() -> None:
+    mapped = {spec.cookbook for spec in SPECS.values()}
+    examples = [
+        path.relative_to(SCENARIOS_ROOT.parents[1] / "cookbook").as_posix()
+        for path in cookbook_example_paths()
+    ]
+    missing = [relative for relative in examples if relative not in mapped]
+    assert missing == [], f"cookbook examples missing scenarios: {missing}"
+
+
+def test_backend_md_names_every_cookbook_scenario() -> None:
+    backend = (SCENARIOS_ROOT / "BACKEND.md").read_text(encoding="utf-8")
+    missing = [spec_id for spec_id in SPECS if spec_id not in backend]
+    assert missing == [], f"BACKEND.md is missing cookbook scenarios: {missing}"

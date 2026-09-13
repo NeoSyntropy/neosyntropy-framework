@@ -5,6 +5,9 @@ the executable graph are the same file. Deliveries under
 ``tests/scenarios/deliveries/`` re-run that graph and assert the related
 database (and vector store) actually changed.
 
+Cookbook examples are copied as ``cookbook_*`` scenarios. Live backend
+endpoints for those copies are listed in ``BACKEND.md``.
+
 Run the delivery suite::
 
     pytest tests/scenarios/deliveries
