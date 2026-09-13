@@ -220,7 +220,7 @@ class S3Loader(BaseLoader):
 
             await self._ainsert_contents_db(content_entry)
 
-            if self._should_skip(content_entry.content_hash, skip_if_exists):
+            if self._should_skip(content_entry, upsert, skip_if_exists):
                 content_entry.status = ContentStatus.COMPLETED
                 await self._aupdate_content(content_entry)
                 continue
@@ -317,7 +317,7 @@ class S3Loader(BaseLoader):
 
             self._insert_contents_db(content_entry)
 
-            if self._should_skip(content_entry.content_hash, skip_if_exists):
+            if self._should_skip(content_entry, upsert, skip_if_exists):
                 content_entry.status = ContentStatus.COMPLETED
                 self._update_content(content_entry)
                 continue
