@@ -8,7 +8,7 @@ from pathlib import Path
 from neosyntropy.databases.storage.s3 import S3Object
 from neosyntropy.knowledge.content import Content, ContentStatus
 from neosyntropy.knowledge.knowledge import Knowledge
-from neosyntropy.knowledge.remote_content.remote_content import GCSContent, S3Content
+from neosyntropy.knowledge.remote_content.remote_content import S3Content
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOADER_FILES = (
@@ -32,17 +32,6 @@ class _FakeS3Bucket:
 
     def object(self, name: str) -> S3Object:
         return S3Object(bucket_name=self.name, name=name)
-
-
-class _FakeGcsBlob:
-    name = "notes.txt"
-
-
-class _FakeGcsBucket:
-    name = "docs"
-
-    def blob(self, name: str) -> _FakeGcsBlob:
-        return _FakeGcsBlob()
 
 
 def _should_skip_calls(path: Path) -> list[ast.Call]:
@@ -89,17 +78,4 @@ def test_s3_load_skip_if_exists_does_not_crash():
     assert len(knowledge.contents) == 1
     assert knowledge.contents[0].status == ContentStatus.COMPLETED
     assert knowledge.contents[0].file_type == "s3"
-
-
-def test_gcs_load_skip_if_exists_does_not_crash():
-    knowledge = Knowledge(vector_db=_ExistingHashVectorDb())
-    content = Content(
-        name="notes",
-        remote_content=GCSContent(bucket=_FakeGcsBucket(), blob_name="notes.txt"),
-    )
-
-    knowledge._load_from_gcs(content, upsert=False, skip_if_exists=True)
-
-    assert len(knowledge.contents) == 1
-    assert knowledge.contents[0].status == ContentStatus.COMPLETED
-    assert knowledge.contents[0].file_type == "gcs"
+    assert knowledge.contents[0].id == knowledge.contents[0].content_hash

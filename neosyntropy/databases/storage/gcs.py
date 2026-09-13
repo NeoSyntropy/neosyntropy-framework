@@ -153,7 +153,7 @@ class GCSLoader(BaseLoader):
                 file_type="gcs",
             )
             content_entry.content_hash = self._build_content_hash(content_entry)
-            content_entry.id = generate_id(content_entry.content_hash)
+            content_entry.id = content_entry.content_hash or generate_id()
 
             await self._ainsert_contents_db(content_entry)
 
@@ -244,7 +244,7 @@ class GCSLoader(BaseLoader):
                 file_type="gcs",
             )
             content_entry.content_hash = self._build_content_hash(content_entry)
-            content_entry.id = generate_id(content_entry.content_hash)
+            content_entry.id = content_entry.content_hash or generate_id()
 
             self._insert_contents_db(content_entry)
 
