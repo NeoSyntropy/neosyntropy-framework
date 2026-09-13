@@ -13,7 +13,9 @@ Credentials: copy [`tests/.env.example`](../../tests/.env.example) to
 project on the local API (`http://127.0.0.1:8000` by default). Override
 `NEOSYNTROPY_API_URL` only if you are not using the local server. Set
 `NEOSYNTROPY_PROVIDER` (for example `gemini-2.5-flash`) when the local
-GPU inference service is not available.
+GPU inference service is not available. Graph publication and `FSM.load`
+stay off unless `NEO_REMOTE_EXECUTION=TRUE` (literal uppercase); see
+[`docs/remote-execution.md`](../../docs/remote-execution.md).
 
 ```bash
 python cookbook/decorators/function_calling_example.py

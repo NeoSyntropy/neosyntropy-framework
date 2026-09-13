@@ -17,7 +17,7 @@
               "title": "A control layer for model-driven systems",
               "paragraphs": [
                 "NeoSyntropy separates probabilistic decisions from deterministic control. Models can propose what should happen next; a finite-state graph defines what is allowed to happen.",
-                "You author nodes and edges in the Python SDK. When backend credentials are set, the NeoSyntropy backend owns selection, routing, plan validation, and state commits. The client only executes local handlers and submits results."
+                "You author nodes and edges in the Python SDK. A Client enables backend inference for SchemaNode and ReasoningNode. Backend-owned selection, routing, plan validation, and commits also require NEO_REMOTE_EXECUTION=TRUE (literal uppercase). Without that flag, ControlManager uses the local PreferredPathRouter."
               ],
               "cards": [
                 {
@@ -41,11 +41,11 @@
               "id": "two-paths",
               "title": "Two execution modes",
               "paragraphs": [
-                "With backend credentials, ControlManager runs an opaque execute/commit loop against POST /api/v1/control/runs. Without credentials, the SDK falls back to a local deterministic router for offline development."
+                "Three modes: (1) credentials only \u2014 local PreferredPathRouter plus optional backend inference; (2) NEOSYNTROPY_MONITOR=TRUE \u2014 same control, plus structure registration and run observers; (3) NEO_REMOTE_EXECUTION=TRUE \u2014 opaque execute/commit loop against POST /api/v1/control/runs, code-bundle publication, and FSM.load. Flags accept only the literal uppercase string TRUE."
               ],
               "callout": {
                 "title": "Preferred path",
-                "text": "Use BackendClient + ControlManager for production. Prefer the control API over internal /api/v1/framework/* inference endpoints."
+                "text": "Use Client + ControlManager. Set NEO_REMOTE_EXECUTION=TRUE for backend-owned control. Prefer the control API over internal /api/v1/framework/* inference endpoints."
               }
             }
           ],
@@ -74,12 +74,12 @@
               "id": "credentials",
               "title": "2. Set credentials",
               "paragraphs": [
-                "Point the SDK at the NeoSyntropy API. Use an API key with the framework:invoke scope, or a user access token with an active subscription."
+                "Point the SDK at the NeoSyntropy API with a full http(s):// URL. Use an API key with the framework:invoke scope, or a user access token with an active subscription. Backend-owned control and FSM.load also need NEO_REMOTE_EXECUTION=TRUE."
               ],
               "code": {
                 "label": ".env",
                 "language": "dotenv",
-                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id\n# or: NEOSYNTROPY_ACCESS_TOKEN=..."
+                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id\n# or: NEOSYNTROPY_ACCESS_TOKEN=...\n# Optional. Literal uppercase TRUE only.\n# NEOSYNTROPY_MONITOR=TRUE\n# NEO_REMOTE_EXECUTION=TRUE"
               }
             },
             {
@@ -88,10 +88,10 @@
               "code": {
                 "label": "Python",
                 "language": "python",
-                "code": "from neosyntropy import BackendClient, ControlManager, Edge, FSM, EmptyOutput, TextOutput, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    \"\"\"Verify the requester owns the order.\"\"\"\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"IssueRefund\", prerequisites=(\"VerifyIdentity\",))\ndef issue_refund(ctx):\n    return ctx.result(state_updates={\"refund_issued\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"Out of scope for this workflow.\")\n\n\ngraph = FSM(\n    nodes=[verify_identity, issue_refund, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"IssueRefund\", label=\"next\"),\n        Edge(source=\"IssueRefund\", target=\"End\", label=\"complete\"),\n    ],\n    )\n\nbackend = BackendClient.from_env()\nmanager = ControlManager(graph, backend=backend)\nresult = manager.run({\"intent\": \"refund my order\", \"current_state\": \"Start\"})\n\nprint(result.final_state)\nprint(result.audit.committed_transitions)"
+                "code": "from neosyntropy import (\n    Client, EmptyOutput, OpenInput, TextOutput, Workflow, node,\n)\n\n@node(id=\"VerifyIdentity\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef verify_identity(ctx):\n    return ctx.result(output={}, state_updates={\"verified\": True})\n\n@node(id=\"IssueRefund\", prerequisites=(\"VerifyIdentity\",), input_schema=OpenInput, output_schema=EmptyOutput)\ndef issue_refund(ctx):\n    return ctx.result(output={}, state_updates={\"refund_issued\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)\ndef out_of_scope(ctx):\n    return ctx.result(output={\"message\": \"Out of scope for this workflow.\"})\n\nfsm = Workflow([verify_identity, issue_refund], fallback=out_of_scope)\nclient = Client(api_key=\"nsk_...\", base_url=\"https://api.neosyntropy.com\")\nclient.create_project(name=\"Support Bot\", slug=\"support-bot\")\nresult = fsm.run({\"text\": \"refund my order\"}, client=client)\n\nprint(result.final_state)\nprint(result.audit.committed_transitions)"
               },
               "paragraphs": [
-                "ControlManager discovers credentials from the environment when backend is omitted. Every cycle returns a RunResult with an AuditRecord of proposals, gate checks, and committed transitions."
+                "Workflow sets entry to the first node and wires a linear path to End plus the required fallback. Every cycle returns a RunResult with an AuditRecord. input_schema and output_schema are required on every node. There is no synthetic Start state and edges have no labels."
               ]
             }
           ],
@@ -162,7 +162,7 @@
               "title": "What belongs in a node",
               "paragraphs": [
                 "A node packages a Python handler or a provider-backed prompt, declared tools, prerequisites, an optional group, and an optional fallback marker.",
-                "Nodes return a NodeResult — output, state_updates, and an optional next_state. That result is a proposal. Nothing a node returns commits state by itself."
+                "Nodes return a NodeResult \u2014 output, state_updates, and an optional next_state. That result is a proposal. Nothing a node returns commits state by itself."
               ]
             },
             {
@@ -175,7 +175,7 @@
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import FSM, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result(state_updates={\"verified\": True})\n\n@node(id=\"CheckEligibility\", prerequisites=(\"VerifyIdentity\",))\ndef check_eligibility(ctx):\n    return ctx.result(state_updates={\"eligible\": True})\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result(output=\"No actionable path.\")\n\ngraph = FSM(nodes=[verify_identity, check_eligibility, out_of_scope], edges=[...])"
+                "code": "from neosyntropy import EmptyOutput, OpenInput, TextOutput, Workflow, node\n\n@node(id=\"VerifyIdentity\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef verify_identity(ctx):\n    return ctx.result(output={}, state_updates={\"verified\": True})\n\n@node(id=\"CheckEligibility\", prerequisites=(\"VerifyIdentity\",), input_schema=OpenInput, output_schema=EmptyOutput)\ndef check_eligibility(ctx):\n    return ctx.result(output={}, state_updates={\"eligible\": True}, next_state=\"End\")\n\n@node(id=\"OutOfScope\", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)\ndef out_of_scope(ctx):\n    return ctx.result(output={\"message\": \"No actionable path.\"})\n\nfsm = Workflow([verify_identity, check_eligibility], fallback=out_of_scope)"
               }
             },
             {
@@ -192,7 +192,7 @@
           "navTitle": "Model-backed nodes",
           "eyebrow": "Core concepts",
           "title": "Put tiny models into ordinary code paths",
-          "description": "SchemaNode and ReasoningNode are how developers drop small, scoped AI models into a workflow. CombineNode expands to reasoning then schema. The control layer — not the model — owns transitions.",
+          "description": "SchemaNode and ReasoningNode are how developers drop small, scoped AI models into a workflow. CombineNode expands to reasoning then schema. The control layer \u2014 not the model \u2014 owns transitions.",
           "sections": [
             {
               "id": "why",
@@ -204,7 +204,7 @@
             },
             {
               "id": "schema-node",
-              "title": "SchemaNode — constrained JSON",
+              "title": "SchemaNode \u2014 constrained JSON",
               "paragraphs": [
                 "SchemaNode is provider-backed schema extraction: the model returns JSON matching output_schema. It has no tools. Use it to produce a typed structure from state or prior notes."
               ],
@@ -216,7 +216,7 @@
             },
             {
               "id": "reasoning-node",
-              "title": "ReasoningNode — tools and notes",
+              "title": "ReasoningNode \u2014 tools and notes",
               "paragraphs": [
                 "ReasoningNode is provider-backed reasoning: the model may call allow-listed tools and writes plain-text notes. Use it for evidence gathering or short deliberation before a later schema step."
               ],
@@ -228,7 +228,7 @@
             },
             {
               "id": "combine-node",
-              "title": "CombineNode — reasoning then schema",
+              "title": "CombineNode \u2014 reasoning then schema",
               "paragraphs": [
                 "CombineNode expands into two FSM states: entry {id} (reasoning + tools) then {id}.Schema (constrained JSON). External edges should target {id} and leave from {id}.Schema."
               ],
@@ -254,10 +254,10 @@
           "sections": [
             {
               "id": "deterministic",
-              "title": "DeterministicRouter — hard rules",
+              "title": "DeterministicRouter \u2014 hard rules",
               "paragraphs": [
-                "DeterministicRouter encodes hard business rules: the first matching (predicate, target) wins. Targets may be nodes, groups, or other routers. At compile time the unit becomes deterministic edges.",
-                "When running against the backend control API, the SDK resolves unique deterministic hops locally before the remote cycle so the backend receives a concrete current state."
+                "DeterministicRouter encodes hard business rules: the first matching (predicate, target) wins. Targets may be nodes, node ids, or other routers \u2014 not groups (use SemanticRouter for group routes). At compile time the unit becomes deterministic edges.",
+                "When NEO_REMOTE_EXECUTION=TRUE, the SDK resolves unique deterministic hops locally before the remote cycle so the backend receives a concrete current state. Credentials without that flag keep routing on PreferredPathRouter."
               ],
               "code": {
                 "label": "Python SDK",
@@ -267,7 +267,7 @@
             },
             {
               "id": "semantic",
-              "title": "SemanticRouter — labeled intent routes",
+              "title": "SemanticRouter \u2014 labeled intent routes",
               "paragraphs": [
                 "SemanticRouter lets a model choose among labeled targets (routes={label: node_or_group}) with an optional fallback_node. The model proposes a label; validators and the transition table still decide whether that hop is legal."
               ],
@@ -278,7 +278,7 @@
               },
               "callout": {
                 "title": "Use for intent branching",
-                "text": "Semantic routers bound the choice set. They are not unconstrained agents — every accepted step is still a logged, gated state change."
+                "text": "Semantic routers bound the choice set. They are not unconstrained agents \u2014 every accepted step is still a logged, gated state change."
               }
             }
           ],
@@ -296,7 +296,7 @@
               "title": "Organization, with optional authored flow",
               "paragraphs": [
                 "Groups name collections of nodes for organization and candidate metadata. A semantic edge may target a group to scope routing; when entry is set, entering the group lands on that entry state.",
-                "Authoring helpers (@group.node, routers, entry, add_edge) compile into the parent FSM. They do not create a second control path — one pipeline owns the sequence end to end."
+                "Authoring helpers (@group.node, routers, entry, add_edge) compile into the parent FSM. They do not create a second control path \u2014 one pipeline owns the sequence end to end."
               ]
             },
             {
@@ -309,7 +309,7 @@
               },
               "callout": {
                 "title": "See Control manager",
-                "text": "Regardless of how many groups a project contains, ControlManager owns select → route → validate → execute → commit."
+                "text": "Regardless of how many groups a project contains, ControlManager owns select \u2192 route \u2192 validate \u2192 execute \u2192 commit."
               }
             }
           ]
@@ -326,12 +326,12 @@
               "title": "State transitions",
               "paragraphs": [
                 "An edge connects one state to another. A node result may propose a target state; only a listed edge (or allow_unlisted_transitions=True) permits the move.",
-                "Edges carry labels with a fixed priority order that drives the deterministic preferred-path router, and optional guards — callables over state that gate the edge at runtime. Guards fail closed."
+                "Three edge kinds only: deterministic (optional guard), semantic (scopes routing to a node or group), and fallback (safe stop). There are no labels and no priority tiers. Guards fail closed \u2014 a guard that raises denies the transition."
               ],
               "code": {
                 "label": "Python SDK",
                 "language": "python",
-                "code": "from neosyntropy import Edge, FSM, node\n\n@node(id=\"VerifyIdentity\")\ndef verify_identity(ctx):\n    return ctx.result()\n\n@node(id=\"OutOfScope\", is_fallback=True)\ndef out_of_scope(ctx):\n    return ctx.result()\n\ngraph = FSM(\n    nodes=[verify_identity, out_of_scope],\n    edges=[\n        Edge(source=\"Start\", target=\"VerifyIdentity\", label=\"first\"),\n        Edge(source=\"VerifyIdentity\", target=\"End\", label=\"complete\"),\n    ],\n)\n\nprint(graph.allows(\"Start\", \"VerifyIdentity\"))  # True"
+                "code": "from neosyntropy import (\n    EmptyOutput, OpenInput, TextOutput, Workflow, edge_deterministic, node,\n)\n\n@node(id=\"VerifyIdentity\", input_schema=OpenInput, output_schema=EmptyOutput)\ndef verify_identity(ctx):\n    return ctx.result(output={}, state_updates={\"verified\": True})\n\n@node(id=\"OutOfScope\", is_fallback=True, input_schema=OpenInput, output_schema=TextOutput)\ndef out_of_scope(ctx):\n    return ctx.result(output={\"message\": \"Out of scope.\"})\n\nfsm = Workflow([verify_identity], fallback=out_of_scope)\n# Workflow wired: VerifyIdentity -> End (deterministic) and\n# VerifyIdentity -> OutOfScope (fallback).\nprint(any(e.source == \"VerifyIdentity\" and e.target == \"End\" for e in fsm.edges))"
               }
             },
             {
@@ -352,7 +352,7 @@
           "navTitle": "Control manager",
           "eyebrow": "Core concepts",
           "title": "ControlManager owns the cycle",
-          "description": "One object runs select → route → validate → gate → execute → gate → commit → audit.",
+          "description": "One object runs select \u2192 route \u2192 validate \u2192 gate \u2192 execute \u2192 gate \u2192 commit \u2192 audit.",
           "sections": [
             {
               "id": "nodes-and-state",
@@ -363,7 +363,7 @@
               ],
               "callout": {
                 "title": "Architectural boundary",
-                "text": "Node selection answers “what work should run?” State transition answers “where is the workflow now?” Keeping these decisions separate prevents execution topology from becoming workflow state."
+                "text": "Node selection answers \u201cwhat work should run?\u201d State transition answers \u201cwhere is the workflow now?\u201d Keeping these decisions separate prevents execution topology from becoming workflow state."
               }
             },
             {
@@ -375,7 +375,7 @@
                 "code": "input -> candidate selection -> router proposal -> plan validation\n      -> execution -> guards / transition checks -> one state commit\n      -> audit record"
               },
               "bullets": [
-                "Proposal is not permission — validators and the transition table decide.",
+                "Proposal is not permission \u2014 validators and the transition table decide.",
                 "Exactly one current state; at most one commit per plan step.",
                 "Fail-closed gates before commit, even after successful execution.",
                 "Every graph has exactly one dedicated fallback node.",
@@ -386,7 +386,7 @@
               "id": "remote",
               "title": "Backend-owned control (preferred)",
               "paragraphs": [
-                "When BackendClient credentials are configured, the backend owns selection, routing, validation, and commits. The client receives opaque execute steps (node ids only), runs local handlers, and posts results. Responses never include topology, candidates, scores, providers, or model names."
+                "When NEO_REMOTE_EXECUTION=TRUE and a Client is configured, the backend owns selection, routing, validation, and commits. The client receives opaque execute steps (node ids only), runs local handlers, and posts results. Responses never include topology, candidates, scores, providers, or model names. A Client without the flag is inference-only."
               ],
               "code": {
                 "label": "Remote loop",
@@ -398,7 +398,7 @@
               "id": "offline",
               "title": "Offline fallback",
               "paragraphs": [
-                "Without backend credentials, ControlManager uses DeterministicRouter locally: walk outgoing edges by label priority, or propose the dedicated fallback when nothing is legal."
+                "Without the remote flag, ControlManager uses PreferredPathRouter: take the first matching deterministic edge, or a unique semantic target, or the dedicated fallback. Edge labels / priority tiers are not part of this SDK."
               ]
             }
           ],
@@ -479,14 +479,14 @@
               "code": {
                 "label": "Response",
                 "language": "json",
-                "code": "{\n  \"run_id\": \"…\",\n  \"status\": \"awaiting_execution\",\n  \"current_state\": \"Start\",\n  \"state\": {},\n  \"step\": { \"step\": 0, \"nodes\": [\"Verify\"] },\n  \"committed_transitions\": [],\n  \"rejection\": null,\n  \"completed\": false\n}"
+                "code": "{\n  \"run_id\": \"\u2026\",\n  \"status\": \"awaiting_execution\",\n  \"current_state\": \"Start\",\n  \"state\": {},\n  \"step\": { \"step\": 0, \"nodes\": [\"Verify\"] },\n  \"committed_transitions\": [],\n  \"rejection\": null,\n  \"completed\": false\n}"
               }
             },
             {
               "id": "results",
               "title": "Submit results",
               "paragraphs": [
-                "Cover exactly the pending step.nodes with results, or send client_rejection (string ≤ 2000). The backend merges state, checks transition legality, commits at most one transition per step, and returns the next view."
+                "Cover exactly the pending step.nodes with results, or send client_rejection (string \u2264 2000). The backend merges state, checks transition legality, commits at most one transition per step, and returns the next view."
               ],
               "code": {
                 "label": "Request",
@@ -522,11 +522,11 @@
               "cards": [
                 {
                   "title": "NEOSYNTROPY_API_URL",
-                  "text": "Base API URL. The SDK normalizes to …/api/v1."
+                  "text": "Base API URL including http:// or https://. The SDK normalizes to \u2026/api/v1."
                 },
                 {
                   "title": "NEOSYNTROPY_API_KEY",
-                  "text": "nsk_… key with framework:invoke (and telemetry:write for observers)."
+                  "text": "nsk_\u2026 key with framework:invoke (and telemetry:write for observers)."
                 },
                 {
                   "title": "NEOSYNTROPY_PROJECT_ID",
@@ -535,13 +535,29 @@
                 {
                   "title": "NEOSYNTROPY_ACCESS_TOKEN",
                   "text": "Alternative to API key for user JWT auth."
+                },
+                {
+                  "title": "NEO_REMOTE_EXECUTION",
+                  "text": "Literal uppercase TRUE enables executable publication, backend-owned control, and FSM.load. Implies monitoring. true / 1 / yes stay off."
+                },
+                {
+                  "title": "NEOSYNTROPY_MONITOR",
+                  "text": "Literal uppercase TRUE registers graph structure and honors RunObserver telemetry. Implied by NEO_REMOTE_EXECUTION."
                 }
               ],
               "code": {
                 "label": ".env",
                 "language": "dotenv",
-                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id"
+                "code": "NEOSYNTROPY_API_URL=https://api.neosyntropy.com\nNEOSYNTROPY_API_KEY=nsk_...\nNEOSYNTROPY_PROJECT_ID=your-project-id\n# Optional. Literal uppercase TRUE only.\n# NEOSYNTROPY_MONITOR=TRUE\n# NEO_REMOTE_EXECUTION=TRUE"
               }
+            },
+            {
+              "id": "feature-flags",
+              "title": "Opt-in publication and remote control",
+              "paragraphs": [
+                "Credentials enable inference. They do not start POST /api/v1/control/runs or FSM.load. Set NEO_REMOTE_EXECUTION=TRUE (literal uppercase) for executable graph upload, backend-owned control, and hydration. Set NEOSYNTROPY_MONITOR=TRUE for structure-only governance and observers.",
+                "Local snapshots land under .neosyntropy/<project_id>/graphs/<graph_id>/ and are gitignored. Required handlers must be extractable: closures may only capture JSON-compatible constants, and the local VFS is capped at 200 files."
+              ]
             },
             {
               "id": "server",
@@ -551,7 +567,7 @@
               ]
             }
           ],
-          "sourceNote": "Client vars from BackendClient.from_env(); server vars from neo_syntropy_backend .env.example."
+          "sourceNote": "Client vars from BackendClient.from_env() and neosyntropy/_features.py; server vars from neo_syntropy_backend .env.example."
         }
       ]
     }

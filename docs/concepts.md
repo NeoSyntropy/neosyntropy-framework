@@ -116,11 +116,17 @@ propose `next_state`; only a listed edge (or an explicit
 `allow_unlisted_transitions=True`) permits the move. Missing edges do not
 skip selection — search finds relevant nodes, and validation fail-closes.
 
-Edges carry labels with a fixed priority order
-(`load < first < next < inferred-next < complete < return < route < conditional`)
-that drives the deterministic preferred-path router, and optional **guards**:
-callables over the state that gate the edge at runtime. Guards fail closed —
-a guard that raises denies the transition.
+Three edge kinds — that is all. There are no labels and no priority tiers:
+
+| Kind | Role |
+|---|---|
+| `deterministic` | Auto-commits when its optional guard passes. No model call. |
+| `semantic` | Scopes the semantic router to a node or group target. |
+| `fallback` | Safe stop when neither deterministic nor semantic yields a route. |
+
+Optional **guards** are callables over the state that gate the edge at
+runtime. Guards fail closed — a guard that raises denies the transition.
+See [`concepts-explained.md`](concepts-explained.md#6-edge--one-permitted-movement).
 
 
 ### Group — organization (and optional authored subgraph)
@@ -163,7 +169,8 @@ billing.add_edge("ValidateCard", "BillingLogic")
 
 `DeterministicRouter` encodes hard business rules: the first matching
 `(predicate, target)` wins. Predicates see run context/state; targets may be
-nodes, groups, or other routers. At compile time the unit becomes
+nodes, node ids, or other routers — not groups (`ValueError` at construction;
+use `SemanticRouter` for group routes). At compile time the unit becomes
 deterministic edges the control cycle can follow without calling a model.
 
 ```python
@@ -176,9 +183,12 @@ auth = DeterministicRouter(
 )
 ```
 
-Guards stay local: when running against the backend control API, the SDK
-resolves unique deterministic hops before the remote cycle so the backend
-receives a concrete current state.
+Guards stay local: when remote execution is on, the SDK resolves unique
+deterministic hops (and first-matching guarded hops) before the remote
+cycle so the backend receives a concrete current state. Backend-owned
+control requires `NEO_REMOTE_EXECUTION=TRUE` — credentials alone keep
+routing on the local `PreferredPathRouter`. See
+[`remote-execution.md`](remote-execution.md).
 
 ### SemanticRouter — labeled intent routes
 
@@ -226,6 +236,12 @@ Rules the manager guarantees:
 - **Auditability by construction.** Every cycle emits an `AuditRecord` (plan,
   candidates, gate checks, committed transitions, rejection reason), so a
   review checks a graph path, not a transcript.
+
+Backend-owned control (opaque `POST /api/v1/control/runs` loop) is opt-in
+via `NEO_REMOTE_EXECUTION=TRUE`. Graph-structure telemetry is opt-in via
+`NEOSYNTROPY_MONITOR=TRUE` (implied by the remote flag). Both values must
+be the literal uppercase string `TRUE`. See
+[`remote-execution.md`](remote-execution.md).
 
 ## The SLM wire contracts
 
