@@ -255,7 +255,7 @@ class AzureBlobLoader(BaseLoader):
 
                 await self._ainsert_contents_db(content_entry)
 
-                if self._should_skip(content_entry.content_hash, skip_if_exists):
+                if self._should_skip(content_entry, upsert, skip_if_exists):
                     content_entry.status = ContentStatus.COMPLETED
                     await self._aupdate_content(content_entry)
                     continue
@@ -287,7 +287,7 @@ class AzureBlobLoader(BaseLoader):
 
                 # Prepare and insert into vector database
                 if not content_entry.id:
-                    content_entry.id = generate_id(content_entry.content_hash or "")
+                    content_entry.id = content_entry.content_hash or generate_id()
                 self._prepare_documents_for_insert(read_documents, content_entry.id)
                 await self._ahandle_vector_db_insert(content_entry, read_documents, upsert)
 
@@ -400,7 +400,7 @@ class AzureBlobLoader(BaseLoader):
 
                 self._insert_contents_db(content_entry)
 
-                if self._should_skip(content_entry.content_hash, skip_if_exists):
+                if self._should_skip(content_entry, upsert, skip_if_exists):
                     content_entry.status = ContentStatus.COMPLETED
                     self._update_content(content_entry)
                     continue
@@ -431,6 +431,6 @@ class AzureBlobLoader(BaseLoader):
 
                 # Prepare and insert into vector database
                 if not content_entry.id:
-                    content_entry.id = generate_id(content_entry.content_hash or "")
+                    content_entry.id = content_entry.content_hash or generate_id()
                 self._prepare_documents_for_insert(read_documents, content_entry.id)
                 self._handle_vector_db_insert(content_entry, read_documents, upsert)

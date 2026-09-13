@@ -120,7 +120,7 @@ class BaseLoader:
         if not content.content_hash:
             content.content_hash = self._build_content_hash(content)  # type: ignore[attr-defined]
         if not content.id:
-            content.id = generate_id(content.content_hash)
+            content.id = content.content_hash or generate_id()
         return content
 
     def _create_content_entry(

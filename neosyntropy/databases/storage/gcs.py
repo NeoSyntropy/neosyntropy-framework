@@ -153,11 +153,11 @@ class GCSLoader(BaseLoader):
                 file_type="gcs",
             )
             content_entry.content_hash = self._build_content_hash(content_entry)
-            content_entry.id = generate_id(content_entry.content_hash)
+            content_entry.id = content_entry.content_hash or generate_id()
 
             await self._ainsert_contents_db(content_entry)
 
-            if self._should_skip(content_entry.content_hash, skip_if_exists):
+            if self._should_skip(content_entry, upsert, skip_if_exists):
                 content_entry.status = ContentStatus.COMPLETED
                 await self._aupdate_content(content_entry)
                 continue
@@ -244,11 +244,11 @@ class GCSLoader(BaseLoader):
                 file_type="gcs",
             )
             content_entry.content_hash = self._build_content_hash(content_entry)
-            content_entry.id = generate_id(content_entry.content_hash)
+            content_entry.id = content_entry.content_hash or generate_id()
 
             self._insert_contents_db(content_entry)
 
-            if self._should_skip(content_entry.content_hash, skip_if_exists):
+            if self._should_skip(content_entry, upsert, skip_if_exists):
                 content_entry.status = ContentStatus.COMPLETED
                 self._update_content(content_entry)
                 continue
