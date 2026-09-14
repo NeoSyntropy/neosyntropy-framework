@@ -1188,14 +1188,21 @@ print(result.final_state)
 print(result.audit.committed_transitions)
 ```
 
-With backend credentials configured, the **backend owns** candidate selection,
-routing, plan validation, and commits. The client defines the graph, runs local
-handlers, and submits results. Responses never include topology, candidates,
-execution plans, providers, or model names.
+API credentials and backend-owned control are **not the same switch**.
 
-Set `NEOSYNTROPY_API_URL` with `NEOSYNTROPY_API_KEY` + `NEOSYNTROPY_PROJECT_ID`
-(or `NEOSYNTROPY_ACCESS_TOKEN`). `ControlManager(graph)` discovers them
-automatically.
+- A `Client` / `BackendClient` (or `NEOSYNTROPY_API_KEY` + optional
+  `NEOSYNTROPY_PROJECT_ID`) is enough for **inference** and, if
+  `NEOSYNTROPY_MONITOR=TRUE`, graph-structure registration.
+- `NEO_REMOTE_EXECUTION=TRUE` (literal uppercase only) is required for the
+  backend to own candidate selection, routing, plan validation, and commits.
+  The client then runs local handlers and posts results. Responses never
+  include topology, candidates, execution plans, providers, or model names.
+
+`ControlManager(graph)` discovers credentials from the environment. Without the
+remote-execution flag it keeps `PreferredPathRouter` locally even when a
+backend client exists.
+
+Runbook: [`remote-execution.md`](remote-execution.md).
 
 ---
 
@@ -1211,7 +1218,8 @@ slow observer never changes execution, validation, commits, or raised errors.
 - **`graph_manifest(graph)`:** inspect the manifest payload
 - Custom observers: `ControlManager(graph, observer=...)`
 
-See [`examples/observability.py`](../examples/observability.py).
+Telemetry is gated by `NEOSYNTROPY_MONITOR=TRUE` (or implied by
+`NEO_REMOTE_EXECUTION=TRUE`). Observers are ignored when both flags are off.
 
 ---
 
@@ -1262,8 +1270,23 @@ It implements three protocols:
 - **`KnowledgeRetrievalProtocol`** — `search` / `asearch` (and optional retrieval FSM)
 
 [`FileSystemKnowledge`](../neosyntropy/knowledge/filesystem.py) is the local
-directory variant (grep / list / read). Loaders pull remote files into a
-corpus: S3, GCS, Azure Blob, SharePoint, GitHub.
+directory variant (grep / list / read). `Knowledge` also inherits remote
+loaders for S3, GCS, Azure Blob, SharePoint, and GitHub
+(`neosyntropy.databases.storage` / `neosyntropy.knowledge.loaders`).
+
+Cloud files are described with `Content.remote_content` (`S3Content`,
+`GitHubContent`, …). Each ingested file gets a **content hash** — MD5 of
+`path` or `url` or `name` — and that hash is used as the storage `id`.
+`skip_if_exists=True` skips a file when a configured vector DB reports
+`content_hash_exists(hash)`.
+
+GitHub can load a repo **without** a vector DB: documents stay on
+`Knowledge.contents` and `search()` falls back to case-insensitive substring
+match. S3 / GCS / Azure still write a contents-db row, then insert into a
+vector DB only when one is configured.
+
+Provider fields (`source_type`, bucket, repo, …) live under the reserved
+`_neosyntropy` metadata key so a later user PATCH cannot overwrite them.
 
 ```python
 from neosyntropy.knowledge import Knowledge
@@ -1335,7 +1358,7 @@ on the FSM.
 
 ```text
                     ┌─ DeterministicRouter ─┐
-Start ──entry──▶   │   (hard rules)        │
+entry ──────────▶   │   (hard rules)        │
                     └──────────┬────────────┘
                                │
                     ┌──────────▼────────────┐
@@ -1369,14 +1392,16 @@ Example shape for a support desk:
 ## Related docs
 
 - [`concepts.md`](concepts.md) — methodology, fail-closed gates, SLM wire contracts
+- [`remote-execution.md`](remote-execution.md) — `NEO_REMOTE_EXECUTION`, `FSM.load`, snapshots, extractability
 - Site concepts: [nodes](https://docs.neosyntropy.com/concepts/nodes) ·
   [model-backed nodes](https://docs.neosyntropy.com/concepts/model-nodes) ·
   [routers](https://docs.neosyntropy.com/concepts/routers) ·
   [edges](https://docs.neosyntropy.com/concepts/edges) ·
   [groups](https://docs.neosyntropy.com/concepts/groups) ·
   [control manager](https://docs.neosyntropy.com/concepts/control-manager)
-- [`examples/refund_workflow.py`](../examples/refund_workflow.py)
-- [`examples/model_tool_calling.py`](../examples/model_tool_calling.py)
+- [`cookbook/fsm`](../cookbook/fsm) — SchemaNode, ReasoningNode, routers, `@node`
+- [`cookbook/decorators`](../cookbook/decorators) — `@function_calling` and `@workflow`
 - [`cookbook/knowledge`](../cookbook/knowledge) — `FileSystemKnowledge` search and transform
 - [`neosyntropy/databases`](../neosyntropy/databases) — vector, graph, relational, document, and object-store adapters
 - [`retrieval_node`](../neosyntropy/core/node/retrieval.py) — inject search hits into FSM state
+- [`tests/scenarios/GRAPH.md`](../tests/scenarios/GRAPH.md) — production-style graphs with delivery tests

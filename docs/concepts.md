@@ -116,11 +116,11 @@ propose `next_state`; only a listed edge (or an explicit
 `allow_unlisted_transitions=True`) permits the move. Missing edges do not
 skip selection — search finds relevant nodes, and validation fail-closes.
 
-Edges carry labels with a fixed priority order
-(`load < first < next < inferred-next < complete < return < route < conditional`)
-that drives the deterministic preferred-path router, and optional **guards**:
-callables over the state that gate the edge at runtime. Guards fail closed —
-a guard that raises denies the transition.
+There are no edge labels and no synthetic `Start` state. Three kinds drive
+control: `deterministic` (auto-commit when the optional guard passes),
+`semantic` (scopes the semantic router to a node or group), and `fallback`
+(used only when the other two miss). Guards are callables over the state;
+they fail closed — a guard that raises denies the transition.
 
 
 ### Group — organization (and optional authored subgraph)
@@ -176,9 +176,10 @@ auth = DeterministicRouter(
 )
 ```
 
-Guards stay local: when running against the backend control API, the SDK
-resolves unique deterministic hops before the remote cycle so the backend
-receives a concrete current state.
+Guards stay local: when remote execution is enabled, the SDK resolves unique
+deterministic hops before the remote cycle so the backend receives a concrete
+current state. API credentials alone do not turn that loop on — see
+[`remote-execution.md`](remote-execution.md).
 
 ### SemanticRouter — labeled intent routes
 
@@ -226,6 +227,10 @@ Rules the manager guarantees:
 - **Auditability by construction.** Every cycle emits an `AuditRecord` (plan,
   candidates, gate checks, committed transitions, rejection reason), so a
   review checks a graph path, not a transcript.
+- **Backend-owned control is opt-in.** `NEO_REMOTE_EXECUTION=TRUE` (literal)
+  switches select / route / validate / commit to the backend. A configured
+  `Client` without that flag still runs `PreferredPathRouter` locally and may
+  use the backend only for inference.
 
 ## The SLM wire contracts
 
