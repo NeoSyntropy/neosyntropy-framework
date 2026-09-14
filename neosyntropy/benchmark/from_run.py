@@ -2,7 +2,7 @@
 
 This is the Agno ``agent.run()`` → FSM training step: one captured control
 run becomes labeled ``(input, ground_truth)`` rows for every model-backed
-node that actually executed.
+node or semantic router that actually executed.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from ..core.graph import FSM
 from ..core.node.base import Node
+from ..core.routing.semantic import SemanticRouter
 
 TRAINABLE_KINDS = frozenset({"schema", "reasoning", "combine_part"})
 
@@ -39,6 +40,10 @@ def _as_object(value: Any) -> dict[str, Any]:
     return {"value": payload}
 
 
+def _target_id(target: Any) -> str:
+    return str(getattr(target, "id", target) or "")
+
+
 def node_is_trainable(node: Node | None) -> bool:
     """True when the node is provider-backed (not a pure Python handler)."""
     if node is None:
@@ -51,10 +56,55 @@ def node_is_trainable(node: Node | None) -> bool:
     return getattr(node, "handler", None) is None and bool(getattr(node, "prompt", ""))
 
 
-def trainable_node_ids(fsm: FSM) -> set[str]:
+def semantic_router_ids(fsm: FSM) -> set[str]:
     return {
-        node.id for node in fsm.nodes.values() if node_is_trainable(node)
+        router.router_state_id
+        for router in fsm.routers.values()
+        if isinstance(router, SemanticRouter)
     }
+
+
+def trainable_node_ids(fsm: FSM) -> set[str]:
+    ids = {node.id for node in fsm.nodes.values() if node_is_trainable(node)}
+    ids |= semantic_router_ids(fsm)
+    return ids
+
+
+def _executed_node_ids(result: Any) -> list[str]:
+    executed: list[str] = []
+    for step in list(getattr(result, "steps", None) or []):
+        for item in getattr(step, "results", None) or []:
+            node_id = str(getattr(item, "node_id", "") or "")
+            if node_id:
+                executed.append(node_id)
+    return executed
+
+
+def _router_choice(fsm: FSM, result: Any) -> dict[str, dict[str, str]]:
+    executed = set(_executed_node_ids(result))
+    choices: dict[str, dict[str, str]] = {}
+    for router in fsm.routers.values():
+        if not isinstance(router, SemanticRouter):
+            continue
+        chosen_id = ""
+        route = ""
+        for label, target in router.routes.items():
+            target_id = _target_id(target)
+            if target_id and target_id in executed:
+                chosen_id = target_id
+                route = str(label)
+                break
+        if not chosen_id:
+            fallback_id = _target_id(router.fallback_node)
+            if fallback_id and fallback_id in executed:
+                chosen_id = fallback_id
+                route = "fallback"
+        if chosen_id:
+            choices[router.router_state_id] = {
+                "chosen_next_node": chosen_id,
+                "route": route,
+            }
+    return choices
 
 
 def samples_from_run(
@@ -67,15 +117,32 @@ def samples_from_run(
     """Map one ``FSM.run`` / ``agent.run`` result to eval-sample payloads.
 
     Returns ``{node_id: [DatasetSampleCreate, ...]}``. Handler-only nodes are
-    skipped. Input is the run's entry payload (the user turn); ground truth is
-    that node's structured output.
+    skipped. Semantic routers are labeled with the route that actually fired.
     """
     trainable = trainable_node_ids(fsm) if fsm is not None else None
     audit = getattr(result, "audit", None)
-    run_input = _as_object(getattr(audit, "input", None) or getattr(result, "state", {}) or {})
+    run_input = _as_object(
+        getattr(audit, "input", None) or getattr(result, "state", {}) or {}
+    )
     request_id = str(getattr(result, "request_id", "") or "")
     steps = list(getattr(result, "steps", None) or [])
     by_node: dict[str, list[dict[str, Any]]] = {}
+
+    def _append(node_id: str, ground_truth: dict[str, Any], suffix: str) -> None:
+        if trainable is not None and node_id not in trainable:
+            return
+        sample: dict[str, Any] = {
+            "split": "train",
+            "source": source,
+            "input_json": run_input,
+            "ground_truth_json": ground_truth,
+            "external_key": f"{request_id}:{node_id}:{suffix}",
+        }
+        if scenario:
+            sample["scenario"] = scenario
+        if request_id:
+            sample["run_id"] = request_id[:64]
+        by_node.setdefault(node_id, []).append(sample)
 
     for step in steps:
         step_index = getattr(step, "step", 0)
@@ -83,26 +150,17 @@ def samples_from_run(
             node_id = str(getattr(item, "node_id", "") or "")
             if not node_id:
                 continue
-            if trainable is not None and node_id not in trainable:
-                continue
             status = str(getattr(item, "status", "") or "")
             if status == "failed":
                 continue
             output = getattr(item, "output", None)
             if output is None:
                 continue
-            sample: dict[str, Any] = {
-                "split": "train",
-                "source": source,
-                "input_json": run_input,
-                "ground_truth_json": _as_object(output),
-                "external_key": f"{request_id}:{node_id}:{step_index}",
-            }
-            if scenario:
-                sample["scenario"] = scenario
-            if request_id:
-                sample["run_id"] = request_id[:64]
-            by_node.setdefault(node_id, []).append(sample)
+            _append(node_id, _as_object(output), str(step_index))
+
+    if fsm is not None:
+        for router_id, choice in _router_choice(fsm, result).items():
+            _append(router_id, choice, "route")
 
     if fsm is not None:
         by_node = {

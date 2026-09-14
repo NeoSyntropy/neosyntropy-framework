@@ -172,11 +172,41 @@ async def _generate_labeled_pairs(
     if count <= 0 or not seeds:
         return []
     node = fsm.nodes.get(node_id)
-    if node is None:
+    router = next(
+        (
+            item
+            for item in fsm.routers.values()
+            if getattr(item, "router_state_id", item.id) == node_id
+            or item.id == node_id
+        ),
+        None,
+    )
+    if node is None and router is None:
         return []
     synthesizer = FSMSynthesizer(fsm=fsm, client=backend, model=model)
-    input_schema = node.input_schema or {"type": "object"}
-    output_schema = node.output_schema or {"type": "object"}
+    if node is not None:
+        input_schema = node.input_schema or {"type": "object"}
+        output_schema = node.output_schema or {"type": "object"}
+        prompt_text = getattr(node, "prompt", "") or node_id
+    else:
+        input_schema = getattr(router, "json_schema", None) or {"type": "object"}
+        labels = list(getattr(router, "routes", {}) or {})
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["chosen_next_node", "route"],
+            "properties": {
+                "chosen_next_node": {"type": "string"},
+                "route": (
+                    {"type": "string", "enum": [*labels, "fallback"]}
+                    if labels
+                    else {"type": "string"}
+                ),
+            },
+        }
+        prompt_text = getattr(router, "description", "") or (
+            f"Route the user to one of: {', '.join(labels)}"
+        )
     pair_schema: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
@@ -186,7 +216,6 @@ async def _generate_labeled_pairs(
             "output": output_schema,
         },
     }
-    prompt_text = getattr(node, "prompt", "") or node_id
     pairs: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(4)
 

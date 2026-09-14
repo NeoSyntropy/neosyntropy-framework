@@ -14,6 +14,7 @@ from neosyntropy.core.models import (
     NodeResult,
     RunResult,
 )
+from neosyntropy.core.routing.semantic import SemanticRouter
 
 
 def _schema_fsm() -> FSM:
@@ -108,6 +109,44 @@ def test_handler_nodes_are_not_trainable() -> None:
     assert "OutOfScope" in trainable_node_ids(fsm)
     result = _run_result(node_id="Validate", output={"ok": True})
     assert samples_from_run(result, fsm=fsm) == {}
+
+
+def test_semantic_router_run_labels_chosen_route() -> None:
+    @node(id="BillingHelp", input_schema=OpenInput, output_schema=TextOutput)
+    def billing(ctx: Any) -> Any:
+        return ctx.result(output={"message": "billing"})
+
+    fallback = SchemaNode(
+        id="OutOfScope",
+        is_fallback=True,
+        input_schema=OpenInput,
+        output_schema=TextOutput,
+        prompt="Refuse.",
+    )
+    router = SemanticRouter(
+        id="SupportIntent",
+        input_schema=OpenInput,
+        routes={"billing": billing},
+        fallback_node=fallback,
+        provider="gemini-2.5-flash",
+    )
+    fsm = FSM(
+        entry=router,
+        nodes=[billing, fallback],
+        routers=[router],
+        edges=[
+            edge_deterministic("BillingHelp", "End"),
+            edge_fallback("SupportIntent", "OutOfScope"),
+        ],
+    )
+    result = _run_result(node_id="BillingHelp", output={"message": "billing"})
+    by_node = samples_from_run(result, fsm=fsm, scenario="semantic_router")
+    assert "SupportIntent" in trainable_node_ids(fsm)
+    assert set(by_node) == {"SupportIntent"}
+    assert by_node["SupportIntent"][0]["ground_truth_json"] == {
+        "chosen_next_node": "BillingHelp",
+        "route": "billing",
+    }
 
 
 def test_create_eval_samples_posts_bulk_payload() -> None:
