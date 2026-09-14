@@ -7,7 +7,7 @@ Provides methods for loading content from AWS S3.
 
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, cast
 
 from neosyntropy.knowledge.content import Content, ContentStatus
 from neosyntropy.knowledge.loaders.base import BaseLoader
@@ -143,6 +143,15 @@ class S3Loader(BaseLoader):
         """Build virtual path for S3 content."""
         return f"s3://{bucket_name}/{object_name}"
 
+    def _s3_object_bytes(self, s3_object: S3Object) -> BytesIO:
+        """Download an object into memory.
+
+        The previous on-disk path wrote to ``storage/<basename>`` without
+        creating that directory, so every non-PDF ingest crashed unless the
+        caller had already mkdir'd CWD/storage.
+        """
+        return BytesIO(s3_object.get_resource().get()["Body"].read())
+
     # ==========================================
     # S3 LOADERS
     # ==========================================
@@ -229,26 +238,13 @@ class S3Loader(BaseLoader):
             reader = self._select_reader_by_uri(s3_object.uri, content.reader)
             reader = cast(Reader, reader)
 
-            # Fetch and load the content
-            temporary_file = None
-            readable_content: Optional[Union[BytesIO, Path]] = None
-            if s3_object.uri.endswith(".pdf"):
-                readable_content = BytesIO(s3_object.get_resource().get()["Body"].read())
-            else:
-                temporary_file = Path("storage").joinpath(file_name)
-                readable_content = temporary_file
-                s3_object.download(readable_content)  # type: ignore
-
-            # Read the content
+            readable_content = self._s3_object_bytes(s3_object)
             read_documents = await reader.async_read(readable_content, name=file_name)
 
-            # Prepare and insert the content in the vector database
             self._prepare_documents_for_insert(read_documents, content_entry.id)
             await self._ahandle_vector_db_insert(content_entry, read_documents, upsert)
-
-            # Remove temporary file if needed
-            if temporary_file:
-                temporary_file.unlink()
+            content_entry.status = ContentStatus.COMPLETED
+            await self._aupdate_content(content_entry)
 
     def _load_from_s3(
         self,
@@ -326,23 +322,10 @@ class S3Loader(BaseLoader):
             reader = self._select_reader_by_uri(s3_object.uri, content.reader)
             reader = cast(Reader, reader)
 
-            # Fetch and load the content
-            temporary_file = None
-            readable_content: Optional[Union[BytesIO, Path]] = None
-            if s3_object.uri.endswith(".pdf"):
-                readable_content = BytesIO(s3_object.get_resource().get()["Body"].read())
-            else:
-                temporary_file = Path("storage").joinpath(file_name)
-                readable_content = temporary_file
-                s3_object.download(readable_content)  # type: ignore
-
-            # Read the content
+            readable_content = self._s3_object_bytes(s3_object)
             read_documents = reader.read(readable_content, name=file_name)
 
-            # Prepare and insert the content in the vector database
             self._prepare_documents_for_insert(read_documents, content_entry.id)
             self._handle_vector_db_insert(content_entry, read_documents, upsert)
-
-            # Remove temporary file if needed
-            if temporary_file:
-                temporary_file.unlink()
+            content_entry.status = ContentStatus.COMPLETED
+            self._update_content(content_entry)
