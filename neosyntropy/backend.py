@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .core.context import RunContext
@@ -189,12 +190,77 @@ class Client:
 
     async def start_tune_job(self, node_id: str) -> str:
         """Trigger a tuning job for a specific node in this client's project."""
-        if not self.project_id:
-            raise ValueError(
-                "project_id is required to start a tune job. Ensure you have "
-                "created or bound to a project first."
-            )
-        return await self._backend.start_tune_job(self.project_id, node_id)
+        backend = self._as_backend()
+        return await backend.start_tune_job(self.project_id or "", node_id)
+
+    async def list_runs(
+        self,
+        *,
+        graph_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List observability runs for the bound project."""
+        backend = self._as_backend()
+        return await backend.list_runs(
+            project_id=self.project_id,
+            graph_id=graph_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def create_eval_samples(
+        self, node_id: str, samples: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Upload eval samples for one node (real cookbook/agent runs or synthetic)."""
+        backend = self._as_backend()
+        return await backend.create_eval_samples(
+            self.project_id or "", node_id, samples
+        )
+
+    async def promote_run_eval_samples(self, run_id: str) -> dict[str, Any]:
+        """Materialize per-node eval samples from an observability run."""
+        backend = self._as_backend()
+        return await backend.promote_run_eval_samples(self.project_id or "", run_id)
+
+    async def accept_eval_sample(self, node_id: str, sample_id: str) -> dict[str, Any]:
+        """Promote a criticized eval sample into the node's training set."""
+        backend = self._as_backend()
+        return await backend.accept_eval_sample(
+            self.project_id or "", node_id, sample_id
+        )
+
+    async def get_tune_status(self, node_id: str) -> dict[str, Any]:
+        """Return sample counts and whether this node is eligible to tune."""
+        backend = self._as_backend()
+        return await backend.get_tune_status(self.project_id or "", node_id)
+
+    async def critic_eval_samples(
+        self,
+        node_id: str,
+        sample_ids: list[str] | None = None,
+        *,
+        model: str = "gemini-2.5-flash",
+        delete_bad: bool = True,
+        scenario: str | None = None,
+    ) -> dict[str, Any]:
+        """Label unlabeled eval samples via the backend critic."""
+        backend = self._as_backend()
+        return await backend.critic_eval_samples(
+            self.project_id or "",
+            node_id,
+            sample_ids,
+            model=model,
+            delete_bad=delete_bad,
+            scenario=scenario,
+        )
+
+    async def pull_eval_samples(self, node_id: str) -> list[dict[str, Any]]:
+        """List eval samples stored for one node."""
+        backend = self._as_backend()
+        return await backend.pull_eval_samples(self.project_id or "", node_id)
 
 
 class BackendClient:
@@ -245,8 +311,16 @@ class BackendClient:
             project_id=project_id or None,
         )
 
-    async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return await asyncio.to_thread(self._post, path, payload)
+    async def post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        allow_list: bool = False,
+    ) -> dict[str, Any] | list[Any]:
+        return await asyncio.to_thread(
+            self._post, path, payload, allow_list=allow_list
+        )
 
     async def register_graph_structure(
         self, manifest: Mapping[str, Any]
@@ -740,6 +814,47 @@ class BackendClient:
             raise BackendError("backend returned an invalid project")
         return created
 
+    async def list_runs(
+        self,
+        *,
+        project_id: str | None = None,
+        graph_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "project_id": project_id,
+            "graph_id": graph_id,
+            "status": status,
+            "limit": limit,
+            "offset": offset,
+        }
+        query = urlencode(
+            {key: value for key, value in params.items() if value is not None}
+        )
+        path = f"/observability/runs?{query}" if query else "/observability/runs"
+        response = await self.get(path)
+        if isinstance(response, list):
+            return [item for item in response if isinstance(item, dict)]
+        if isinstance(response, dict):
+            items = response.get("items") or response.get("runs") or []
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
+    async def get_run(
+        self, run_id: str, *, project_id: str | None = None
+    ) -> dict[str, Any]:
+        query = urlencode({"project_id": project_id} if project_id else {})
+        path = f"/observability/runs/{run_id}"
+        if query:
+            path = f"{path}?{query}"
+        response = await self.get(path)
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid run")
+        return response
+
     async def pull_eval_samples(
         self, project_id: str, node_id: str
     ) -> list[dict[str, Any]]:
@@ -752,6 +867,73 @@ class BackendClient:
         if isinstance(response, dict) and "samples" in response:
             return response["samples"]
         return [response] if response else []
+
+    async def create_eval_samples(
+        self,
+        project_id: str,
+        node_id: str,
+        samples: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """POST per-node eval samples (real agent/FSM runs or synthetic pairs)."""
+        if not samples:
+            return []
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples"
+        response = await self.post(path, {"samples": samples}, allow_list=True)
+        if isinstance(response, list):
+            return [item for item in response if isinstance(item, dict)]
+        if isinstance(response, dict):
+            items = response.get("items") or response.get("samples") or []
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        raise BackendError("backend returned invalid eval samples")
+
+    async def promote_run_eval_samples(
+        self, project_id: str, run_id: str
+    ) -> dict[str, Any]:
+        """Turn one observability run into per-node eval-sample candidates."""
+        path = f"/observability/projects/{project_id}/runs/{run_id}/eval-samples"
+        response = await self.post(path, {})
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid run promotion")
+        return response
+
+    async def accept_eval_sample(
+        self, project_id: str, node_id: str, sample_id: str
+    ) -> dict[str, Any]:
+        path = (
+            f"/observability/projects/{project_id}/nodes/{node_id}"
+            f"/eval-samples/{sample_id}/accept"
+        )
+        response = await self.post(path, {})
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid accept payload")
+        return response
+
+    async def synthesize_eval_samples(
+        self,
+        project_id: str,
+        *,
+        node_ids: list[str] | None = None,
+        samples_per_node: int = 10,
+        model: str = "gemini-2.5-flash",
+        scenario: str | None = None,
+        prompt: str = "",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "samples_per_node": samples_per_node,
+            "model": model,
+            "prompt": prompt,
+        }
+        if node_ids:
+            payload["node_ids"] = node_ids
+        if scenario:
+            payload["scenario"] = scenario
+        response = await self.post(
+            f"/observability/projects/{project_id}/eval/synthesize", payload
+        )
+        if not isinstance(response, dict):
+            raise BackendError("backend returned invalid synthesis results")
+        return response
 
     async def critic_eval_samples(
         self,
@@ -772,7 +954,10 @@ class BackendClient:
         path = (
             f"/observability/projects/{project_id}/nodes/{node_id}/eval-samples/critic"
         )
-        return await self.post(path, payload)
+        response = await self.post(path, payload)
+        if not isinstance(response, dict):
+            raise BackendError("backend returned an invalid critic payload")
+        return response
 
     async def judge_output(
         self,
@@ -810,37 +995,60 @@ class BackendClient:
     async def start_tune_job(self, project_id: str, node_id: str) -> str:
         path = f"/observability/projects/{project_id}/nodes/{node_id}/tune"
         res = await self.post(path, {})
-        return res.get("id", "")
+        if not isinstance(res, dict):
+            raise BackendError("backend returned an invalid tune job")
+        return str(res.get("id") or "")
 
-    async def get_tune_job(self, project_id: str, node_id: str, job_id: str) -> dict[str, Any]:
-        path = f"/observability/projects/{project_id}/nodes/{node_id}/tune/{job_id}"
+    async def get_tune_status(self, project_id: str, node_id: str) -> dict[str, Any]:
+        path = f"/observability/projects/{project_id}/nodes/{node_id}/tune-status"
         response = await self.get(path)
         return response if isinstance(response, dict) else {}
 
-    async def wait_for_tune_job(self, project_id: str, node_id: str, job_id: str, poll_interval: float = 10.0) -> dict[str, Any]:
-        """Poll the tune job until it reaches a terminal state."""
+    async def get_tune_job(
+        self, project_id: str, node_id: str, job_id: str
+    ) -> dict[str, Any]:
+        status = await self.get_tune_status(project_id, node_id)
+        job = status.get("job")
+        if isinstance(job, dict) and (not job_id or str(job.get("id") or "") == job_id):
+            return job
+        return status
+
+    async def wait_for_tune_job(
+        self,
+        project_id: str,
+        node_id: str,
+        job_id: str,
+        poll_interval: float = 10.0,
+    ) -> dict[str, Any]:
+        """Poll ``tune-status`` until the job reaches a terminal state."""
         import logging
-        import asyncio
+
         logger = logging.getLogger("neosyntropy.backend")
-        logger.info(f"Waiting for tune job {job_id} on node {node_id} (project {project_id}) to complete...")
-        
+        logger.info(
+            "Waiting for tune job %s on node %s (project %s) to complete...",
+            job_id,
+            node_id,
+            project_id,
+        )
+
         while True:
+            status_payload: dict[str, Any] = {}
             try:
-                # We assume GET /observability/projects/{project_id}/nodes/{node_id}/tune/{job_id} exists.
-                # If it doesn't, we might need to adjust this endpoint.
-                path = f"/observability/projects/{project_id}/nodes/{node_id}/tune/{job_id}"
-                job = await self.get(path)
+                status_payload = await self.get_tune_status(project_id, node_id)
+                job = status_payload.get("job")
                 if not isinstance(job, dict):
                     job = {"status": "unknown"}
-            except Exception as e:
-                logger.warning(f"Failed to poll tune job {job_id}: {e}")
+            except Exception as exc:
+                logger.warning("Failed to poll tune job %s: %s", job_id, exc)
                 job = {"status": "unknown"}
-                
-            status = job.get("status", "").lower()
+
+            status = str(job.get("status") or "").lower()
             if status in ("succeeded", "failed", "completed", "error", "cancelled"):
-                logger.info(f"Tune job {job_id} reached terminal state: {status}")
+                logger.info("Tune job %s reached terminal state: %s", job_id, status)
                 return job
-                
+            if status_payload.get("tuned") is True:
+                return job if isinstance(job, dict) else status_payload
+
             await asyncio.sleep(poll_interval)
 
     def _get(
@@ -910,7 +1118,8 @@ class BackendClient:
         payload: dict[str, Any],
         *,
         timeout: float | None = None,
-    ) -> dict[str, Any]:
+        allow_list: bool = False,
+    ) -> dict[str, Any] | list[Any]:
         token = self.access_token or self.api_key
         headers = {
             "Authorization": f"Bearer {token}",
@@ -964,9 +1173,11 @@ class BackendClient:
             raise BackendError(f"cannot reach NeoSyntropy backend: {exc.reason}") from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BackendError("backend returned invalid JSON") from exc
-        if not isinstance(decoded, dict):
-            raise BackendError("backend response must be a JSON object")
-        return decoded
+        if isinstance(decoded, dict):
+            return decoded
+        if allow_list and isinstance(decoded, list):
+            return decoded
+        raise BackendError("backend response must be a JSON object")
 
     def _request_bytes(
         self,

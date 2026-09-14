@@ -27,3 +27,13 @@ python cookbook/fsm/python_node_example.py
 
 If the local GPU inference service is unavailable, set `NEOSYNTROPY_PROVIDER`
 to a hosted model such as `gemini-2.5-flash`.
+
+## Train from cookbook runs
+
+Each `fsm.run(...)` is an agent run. Convert those traces into per-node
+training samples (critic → accept → tune) with:
+
+```bash
+python scripts/train_cookbook_models.py cookbook/fsm/schema_node_example.py
+python scripts/train_cookbook_models.py --synthetic 8
+```

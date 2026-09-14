@@ -10,6 +10,12 @@ from .critic import Critic, ExactMatchCritic, BackendCritic
 from .metrics import NodeAccuracyTracker, RouterAccuracyTracker, FullPathAccuracyTracker
 from .runner import BenchmarkRunner
 from .synthesizer import FSMSynthesizer
+from .from_run import samples_from_run, trainable_node_ids
+from .cookbook_train import (
+    CookbookTrainReport,
+    train_cookbook,
+    train_cookbooks,
+)
 
 __all__ = [
     "BenchmarkDataset",
@@ -24,4 +30,9 @@ __all__ = [
     "FullPathAccuracyTracker",
     "BenchmarkRunner",
     "FSMSynthesizer",
+    "samples_from_run",
+    "trainable_node_ids",
+    "CookbookTrainReport",
+    "train_cookbook",
+    "train_cookbooks",
 ]
