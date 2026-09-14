@@ -1,10 +1,14 @@
-import pytest
+import asyncio
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+from neosyntropy.control.executor import TopologyExecutor
+from neosyntropy.core.context import RunContext
 from neosyntropy.core.node import retrieval_node
 from neosyntropy.databases.vector.base import VectorDb
 from neosyntropy.knowledge.document.base import Document
+from neosyntropy.providers.base import ProviderRegistry
+from neosyntropy.tools.core.registry import ToolRegistry
 
 def test_retrieval_node_success():
     """Test that the retrieval node correctly extracts query and injects docs."""
@@ -118,4 +122,34 @@ def test_retrieval_node_with_knowledge_protocol():
     assert len(res_docs) == 1
     assert res_docs[0]["content"] == "Retrieved 'syntropy dynamics' via retrieval_fsm"
     assert res_docs[0]["meta_data"] == {"source": "knowledge"}
+
+
+def test_retrieval_node_executor_reads_query_from_node_context():
+    """TopologyExecutor passes NodeContext, not a raw state dict."""
+    docs = [
+        Document(id="1", content="Alpha is the first.", meta_data={"source": "doc1"}),
+    ]
+    db = MagicMock(spec=VectorDb)
+    db.search.return_value = docs
+
+    node = retrieval_node(
+        id="FetchContext",
+        vector_db=db,
+        query_key="search_query",
+        output_key="context",
+        limit=2,
+    )
+    executor = TopologyExecutor(ProviderRegistry({}), ToolRegistry())
+    context = RunContext(
+        request_id="req-1",
+        input={},
+        current_state="FetchContext",
+        state={"search_query": "What is alpha?"},
+    )
+
+    result = asyncio.run(executor._run_node(node, context))
+
+    assert result.status == "succeeded"
+    assert result.state_updates["context"][0]["content"] == "Alpha is the first."
+    db.search.assert_called_once_with(query="What is alpha?", limit=2)
 
