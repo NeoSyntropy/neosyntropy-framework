@@ -54,3 +54,47 @@ def test_control_api_graph_moves_router_stubs_to_routers() -> None:
     assert "SkillRouter" not in node_ids
     assert wire["routers"] == ["PhaseRouter", "SkillRouter"]
     assert all(node.get("output_schema") for node in wire["nodes"])
+
+
+def test_control_api_graph_strips_console_only_group_fields() -> None:
+    wire = _control_api_graph(
+        {
+            "schema_version": 1,
+            "entry": "DoWork",
+            "input_schema": {"type": "object"},
+            "nodes": [
+                {
+                    "id": "DoWork",
+                    "name": "DoWork",
+                    "kind": "schema",
+                    "is_fallback": False,
+                    "group": "triage",
+                    "output_schema": {"type": "object"},
+                    "input_schema": {"type": "object"},
+                },
+                {
+                    "id": "OutOfScope",
+                    "name": "OutOfScope",
+                    "kind": "schema",
+                    "is_fallback": True,
+                    "output_schema": {"type": "object"},
+                },
+            ],
+            "routers": [],
+            "edges": [],
+            "groups": [
+                {
+                    "name": "triage",
+                    "entry": "DoWork",
+                    "parent": None,
+                    "description": "console only",
+                    "metadata": {"owner": "support"},
+                    "namespace": False,
+                }
+            ],
+        }
+    )
+
+    assert wire["groups"] == [
+        {"name": "triage", "entry": "DoWork", "parent": None}
+    ]
