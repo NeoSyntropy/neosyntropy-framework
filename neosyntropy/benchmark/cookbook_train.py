@@ -347,14 +347,23 @@ async def train_captured_runs(
             have = int(status.get("sample_count") or 0) + len(real_samples)
             target_synthetic = max(target_synthetic, max(0, required - have))
 
+        seeds = [
+            {
+                "input": sample.get("input_json"),
+                "output": sample.get("ground_truth_json"),
+            }
+            for sample in real_samples
+        ]
+        if not seeds:
+            for item in captured:
+                audit = getattr(item.result, "audit", None)
+                run_input = getattr(audit, "input", None) if audit is not None else None
+                if isinstance(run_input, dict) and run_input:
+                    seeds.append({"input": run_input, "output": {}})
+        if not seeds:
+            seeds = [{"input": {}, "output": {}}]
+
         if target_synthetic:
-            seeds = [
-                {
-                    "input": sample.get("input_json"),
-                    "output": sample.get("ground_truth_json"),
-                }
-                for sample in real_samples
-            ] or [{"input": {}, "output": {}}]
             generated = await _generate_labeled_pairs(
                 backend,
                 fsm,
