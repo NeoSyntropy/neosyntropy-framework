@@ -1,0 +1,4 @@
+{
+  "name": "NeoSyntropy Framework",
+  "install": "python3 -m pip install --quiet uv && python3 -m uv sync --extra dev"
+}
