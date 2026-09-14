@@ -26,6 +26,7 @@ from typing import Any
 from .._features import monitor_enabled, remote_execution_enabled
 from ..backend import (
     BackendClient,
+    BackendError,
     BackendProvider,
     BackendSemanticRouter,
     Client,
@@ -1042,38 +1043,51 @@ class ControlManager:
                     f"{issues}"
                 )
             revision = str(packaged.manifest.get("revision") or "")
-            if getattr(self.graph, "_remote_snapshot_revision", None) != revision:
-                graph_record = await asyncio.wait_for(
-                    self._backend.register_graph_structure(structure),
-                    timeout=self.telemetry_timeout,
-                )
-                graph_id = graph_record.get("id")
-                if not graph_id:
-                    raise RuntimeError("graph structure registration failed")
-                await self._backend.upload_code_bundles(packaged.bundles)
-                await asyncio.wait_for(
-                    self._backend.publish_graph_recovery(
-                        str(graph_id), packaged.manifest
-                    ),
-                    timeout=self.telemetry_timeout,
-                )
-                snapshot = await asyncio.wait_for(
-                    self._backend.get_graph_snapshot(str(graph_id)),
-                    timeout=max(
-                        self.telemetry_timeout,
-                        float(
-                            getattr(self._backend, "timeout", 0.0) or 0.0
+            if (
+                getattr(self.graph, "_remote_publication_unavailable", False)
+                or getattr(self.graph, "_remote_snapshot_revision", None) == revision
+            ):
+                pass
+            else:
+                try:
+                    graph_record = await asyncio.wait_for(
+                        self._backend.register_graph_structure(structure),
+                        timeout=self.telemetry_timeout,
+                    )
+                except BackendError as exc:
+                    if exc.http_status != 405:
+                        raise
+                    # Prod currently exposes graph reads without writes.
+                    # Backend-owned control still runs via POST /control/runs.
+                    self.graph._remote_publication_unavailable = True
+                else:
+                    graph_id = graph_record.get("id")
+                    if not graph_id:
+                        raise RuntimeError("graph structure registration failed")
+                    await self._backend.upload_code_bundles(packaged.bundles)
+                    await asyncio.wait_for(
+                        self._backend.publish_graph_recovery(
+                            str(graph_id), packaged.manifest
                         ),
-                    ),
-                )
-                await asyncio.to_thread(
-                    write_graph_snapshot,
-                    snapshot["graph"],
-                    snapshot["artifacts"],
-                    snapshot["bundles"],
-                )
-                self.graph.graph_id = str(graph_id)
-                self.graph._remote_snapshot_revision = revision
+                        timeout=self.telemetry_timeout,
+                    )
+                    snapshot = await asyncio.wait_for(
+                        self._backend.get_graph_snapshot(str(graph_id)),
+                        timeout=max(
+                            self.telemetry_timeout,
+                            float(
+                                getattr(self._backend, "timeout", 0.0) or 0.0
+                            ),
+                        ),
+                    )
+                    await asyncio.to_thread(
+                        write_graph_snapshot,
+                        snapshot["graph"],
+                        snapshot["artifacts"],
+                        snapshot["bundles"],
+                    )
+                    self.graph.graph_id = str(graph_id)
+                    self.graph._remote_snapshot_revision = revision
         elif self._monitor_backend is not None:
             await best_effort_call(
                 self._monitor_backend.register_graph_structure(structure),

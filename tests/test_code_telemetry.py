@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from neosyntropy import FSM, SchemaNode, ToolRegistry, edge_deterministic, edge_fallback
+from neosyntropy.backend import BackendError
 from neosyntropy.control.manager import ControlManager
 from neosyntropy.core.node.base import Node
 
@@ -173,6 +174,71 @@ async def test_unrecoverable_graph_is_not_registered() -> None:
         await manager._observation_started(
             SimpleNamespace(request_id="request-1", current_state="Builtin")
         )
+
+
+@pytest.mark.asyncio
+async def test_graph_write_405_skips_publication_and_continues() -> None:
+    node = Node(
+        id="Handler",
+        handler=_remote_handler,
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+    )
+    fallback = SchemaNode(
+        id="Fallback",
+        prompt="Fallback.",
+        is_fallback=True,
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+    )
+    graph = FSM(
+        entry=node,
+        nodes=[node, fallback],
+        edges=[
+            edge_deterministic("Handler", "End"),
+            edge_fallback("Handler", "Fallback"),
+        ],
+    )
+    calls = {"register": 0, "upload": 0}
+
+    class Backend:
+        async def register_graph_structure(
+            self, manifest: dict[str, Any]
+        ) -> dict[str, str]:
+            calls["register"] += 1
+            raise BackendError(
+                "backend returned HTTP 405: Method Not Allowed",
+                http_status=405,
+            )
+
+        async def upload_code_bundles(self, bundles: dict[str, bytes]) -> None:
+            calls["upload"] += 1
+            raise AssertionError("405 must skip code upload")
+
+    class Observer:
+        async def run_started(self, **kwargs: Any) -> str:
+            return "run-1"
+
+    manager = ControlManager.__new__(ControlManager)
+    manager.graph = graph
+    manager.tools = ToolRegistry()
+    manager._backend = Backend()
+    manager._monitor_backend = manager._backend
+    manager._monitor_enabled = True
+    manager._remote_execution_enabled = True
+    manager.observer = Observer()
+    manager.telemetry_timeout = 1.0
+    manager._run_input = lambda context: {}
+
+    context = SimpleNamespace(request_id="request-1", current_state="Handler")
+    run_id = await manager._observation_started(context)
+    assert run_id == "run-1"
+    assert calls == {"register": 1, "upload": 0}
+    assert graph._remote_publication_unavailable is True
+
+    again = await manager._observation_started(context)
+    assert again == "run-1"
+    assert calls["register"] == 1
 
 
 @pytest.mark.asyncio
