@@ -89,3 +89,4 @@ The `ControlManager` orchestrates each step of a workflow run, ensuring determin
 *   **Proposal is not permission**: Model or router proposals are always subject to validation against the graph.
 *   **One current state**: At most one atomic commit occurs per plan step.
 *   **Fail-closed before commit**: Even if a model has high confidence, an illegal transition or failed guard will result in rejection, and the workflow state remains unchanged for that step.
+*   **Backend-owned control is opt-in**: `NEO_REMOTE_EXECUTION=TRUE` (literal) is required for the backend to own select / route / validate / commit. API credentials without that flag still route locally via `PreferredPathRouter`. See [`docs/remote-execution.md`](../remote-execution.md).

@@ -135,6 +135,7 @@ entrypoints and workers are next.
 | [`KnowledgeRetrieval`](neosyntropy/knowledge/protocol.py) | Wrapper for searching `Knowledge`: a `retrieval_node`, tools, and its own FSM for the retrieval loop. Keeps retrieval (and its governance) off the main workflow. [`cookbook`](cookbook/knowledge/retrieval_example.py) | [`concepts`](docs/concepts-explained.md#15-retrieval_node--knowledge-into-state) |
 | Entrypoint *(not implemented yet)* | An API that publishes the full FSM into NeoSyntropy cloud. |
 | Workers *(not implemented yet)* | Assign a worker to an FSM. The worker receives an event and activates that FSM. |
+| [Remote execution](docs/remote-execution.md) | Opt-in (`NEO_REMOTE_EXECUTION=TRUE`) publication of extractable handlers, `FSM.load`, and backend-owned control. Credentials alone do not enable that loop. |
 
 ## Install
 
@@ -168,12 +169,13 @@ project = client.create_project(
 print(project["id"])   # pass this as project_id= in subsequent Client(...) calls
 ```
 
-Pass `base_url=` to target a self-hosted or local backend:
+Pass `base_url=` to target a self-hosted or local backend. The value **must**
+include `http://` or `https://` — a host-only string raises `ValueError`.
 
 ```python
 client = Client(
     api_key="your-api-key",
-    base_url="api.neosyntropy.com",   # or localhost in case your orgnization deploy neosyntropy in vpc. 
+    base_url="https://api.neosyntropy.com",  # or http://127.0.0.1:8000 in a VPC
 )
 ```
 
@@ -245,7 +247,8 @@ Every cycle returns a `RunResult` with a full `AuditRecord`. A rejection is a
 normal outcome: `result.rejected` is set and the audit explains why.
 
 More detail: [`docs/concepts-explained.md`](docs/concepts-explained.md) |
-[`examples/refund_workflow.py`](examples/refund_workflow.py) |
+[`docs/remote-execution.md`](docs/remote-execution.md) |
+[`cookbook/fsm`](cookbook/fsm) |
 [`cookbook/decorators`](cookbook/decorators)
 
 ## License
