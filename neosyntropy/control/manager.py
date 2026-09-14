@@ -524,6 +524,24 @@ class ControlManager:
                 )
                 break
 
+            filled_results: list[NodeResult] = []
+            for result in results:
+                next_state = result.next_state
+                if (
+                    next_state is None
+                    and result.status == "succeeded"
+                    and result.node_id
+                ):
+                    matching = self.graph.first_matching_deterministic(
+                        result.node_id, preview_state
+                    )
+                    if matching is not None:
+                        result = result.model_copy(
+                            update={"next_state": matching.target}
+                        )
+                filled_results.append(result)
+            results = filled_results
+
             steps.append(ExecutionStepResult(step=step_number, results=results))
             view = await self._backend.submit_control_results(
                 str(view["run_id"]),
