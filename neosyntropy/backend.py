@@ -1123,6 +1123,7 @@ _CONTROL_API_GRAPH_FIELDS = frozenset(
         "allow_unlisted_transitions",
     }
 )
+_CONTROL_API_GROUP_FIELDS = frozenset({"name", "entry", "parent"})
 
 
 def _control_api_graph(
@@ -1164,10 +1165,20 @@ def _control_api_graph(
     payload = {
         key: graph_manifest[key]
         for key in _CONTROL_API_GRAPH_FIELDS
-        if key in graph_manifest and key not in {"nodes", "routers"}
+        if key in graph_manifest and key not in {"nodes", "routers", "groups"}
     }
     payload["nodes"] = nodes
     payload["routers"] = router_ids
+    groups: list[dict[str, Any]] = []
+    for group in graph_manifest.get("groups") or []:
+        if not isinstance(group, Mapping):
+            continue
+        projected = {
+            key: group[key] for key in _CONTROL_API_GROUP_FIELDS if key in group
+        }
+        if projected.get("name"):
+            groups.append(projected)
+    payload["groups"] = groups
     if "router_providers" in graph_manifest and isinstance(
         graph_manifest.get("router_providers"), Mapping
     ):
