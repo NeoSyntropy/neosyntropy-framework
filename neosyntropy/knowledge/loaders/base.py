@@ -7,9 +7,13 @@ Provides common helpers for:
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from neosyntropy.knowledge.content import Content, ContentStatus
+from neosyntropy.knowledge.reader import Reader
+from neosyntropy.knowledge.reader.reader_factory import ReaderFactory
 from neosyntropy.knowledge.utils import RESERVED_NEOSYNTROPY_KEY, strip_neosyntropy_metadata
 from neosyntropy.utils.string import generate_id
 
@@ -194,3 +198,23 @@ class BaseLoader:
             }
             for f in files
         ]
+
+    def _select_reader_by_uri(
+        self,
+        uri: str,
+        reader: Optional[Reader] = None,
+    ) -> Optional[Reader]:
+        """Return the caller-supplied reader, or one inferred from ``uri``.
+
+        Cloud loaders call this after inserting a PROCESSING row. The method
+        must exist on Knowledge/loader instances; a missing implementation
+        crashes every S3/GCS/Azure/SharePoint/GitHub ingest that is not skipped.
+        """
+        if reader is not None:
+            return reader
+
+        cleaned = str(uri or "").split("?", 1)[0].rstrip("/")
+        parsed = urlparse(cleaned)
+        path = parsed.path if parsed.scheme else cleaned
+        suffix = Path(path).suffix
+        return ReaderFactory.get_reader_for_extension(suffix or ".txt")
