@@ -421,7 +421,7 @@ async def train_cookbook(
     emit(f"\n=== train {relative} ===")
     os.environ.setdefault("NEO_REMOTE_EXECUTION", "TRUE")
     try:
-        captured = execute_cookbook(relative, root=root)
+        captured = await asyncio.to_thread(execute_cookbook, relative, root=root)
     except SystemExit as exc:
         return CookbookTrainReport(
             cookbook=relative, error=f"cookbook exited: {exc}"
