@@ -607,6 +607,36 @@ def test_bundle_hydration_restores_local_modules_and_typed_bindings() -> None:
     assert loaded(3) == (16, b"ok")
 
 
+def test_bundle_hydration_isolates_shared_module_paths_across_artifacts() -> None:
+    """Two artifacts can share /app/pkg/util.py with different sliced bodies.
+
+    Without per-bundle sys.modules isolation the first slice is cached and the
+    second handler silently runs the other artifact's code.
+    """
+
+    def _payload(token: str) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "entry_file": "/app/pkg/entry.py",
+            "vfs": {
+                "/app/pkg/entry.py": (
+                    "def run():\n"
+                    "    from pkg.util import TOKEN\n"
+                    "    return TOKEN\n"
+                ),
+                "/app/pkg/util.py": f"TOKEN = {token!r}\n",
+            },
+            "callable": {"name": "run"},
+        }
+
+    run_a, _ = load_bundle_callable(_payload("A"), artifact_id="sha256:aaa")
+    run_b, _ = load_bundle_callable(_payload("B"), artifact_id="sha256:bbb")
+
+    assert run_a() == "A"
+    assert run_b() == "B"
+    assert run_a() == "A"
+
+
 def test_load_rejects_incompatible_runtime_before_downloading_code() -> None:
     from neosyntropy.cloud.monitor._manifest import structure_hash
     from neosyntropy.cloud.remote import recovery_revision
