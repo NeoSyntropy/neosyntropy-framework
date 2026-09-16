@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import functools
 import gzip
 import hashlib
 import importlib.metadata
+import inspect
 import json
 import platform
 import re
@@ -298,6 +300,80 @@ def _binding_value(raw: Any, callables: Mapping[str, Any]) -> Any:
     return {str(key): _binding_value(value, callables) for key, value in raw.items()}
 
 
+_BUNDLE_ROOT_PREFIX = "neosyntropy-code-"
+
+
+def _bundle_root_of(path: str) -> str | None:
+    """Return the materialized VFS root if *path* lives under one."""
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return None
+    current = resolved if resolved.is_dir() else resolved.parent
+    for candidate in (current, *current.parents):
+        if candidate.name.startswith(_BUNDLE_ROOT_PREFIX):
+            return str(candidate)
+    return None
+
+
+def _module_origins(module: Any) -> list[str]:
+    origins: list[str] = []
+    filename = getattr(module, "__file__", None)
+    if filename:
+        origins.append(str(filename))
+    for item in getattr(module, "__path__", ()) or ():
+        origins.append(str(item))
+    return origins
+
+
+def _activate_bundle_root(root: str) -> None:
+    """Make *root* the first import path and drop modules from other bundles.
+
+    Each artifact is extracted into its own temp VFS, but shared project paths
+    such as ``pkg/util.py`` become the same ``sys.modules`` key. Leaving the
+    first bundle's slice cached makes later artifacts silently execute the
+    wrong code (or fail to import symbols that only exist in their own slice).
+    """
+    active = str(Path(root).resolve())
+    stale = [
+        name
+        for name, module in sys.modules.items()
+        if any(
+            (bundle_root := _bundle_root_of(origin)) and bundle_root != active
+            for origin in _module_origins(module)
+        )
+    ]
+    for name in stale:
+        sys.modules.pop(name, None)
+    if active in sys.path:
+        sys.path.remove(active)
+    sys.path.insert(0, active)
+
+
+def _isolate_bundle_callable(fn: Callable[..., Any], root: str) -> Callable[..., Any]:
+    """Re-activate *root* on every call so lazy imports see this artifact's VFS."""
+
+    if inspect.iscoroutinefunction(fn):
+
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _activate_bundle_root(root)
+            return await fn(*args, **kwargs)
+
+        wrapper: Callable[..., Any] = async_wrapper
+    else:
+
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _activate_bundle_root(root)
+            return fn(*args, **kwargs)
+
+        wrapper = sync_wrapper
+    try:
+        functools.update_wrapper(wrapper, fn)
+    except AttributeError:
+        wrapper.__name__ = getattr(fn, "__name__", "handler")
+    return wrapper
+
+
 def load_bundle_callable(
     payload: Mapping[str, Any],
     *,
@@ -348,9 +424,7 @@ def load_bundle_callable(
     if function_name != source_name and source_name not in {"", "<lambda>"}:
         entry_source += f"\n{function_name} = {source_name}\n"
     root_string = str(root)
-    if root_string not in sys.path:
-        # Keep the materialized root importable for lazy imports inside callbacks.
-        sys.path.insert(0, root_string)
+    _activate_bundle_root(root_string)
     try:
         exec(compile(entry_source, entry_file, "exec"), namespace)
     except Exception as exc:
@@ -370,7 +444,7 @@ def load_bundle_callable(
             loaded = candidates[0]
     if not callable(loaded):
         raise CodeBundleError(f"entry function {function_name!r} is not callable")
-    return loaded, str(root)
+    return _isolate_bundle_callable(loaded, root_string), root_string
 
 
 __all__ = [
