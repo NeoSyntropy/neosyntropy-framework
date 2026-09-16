@@ -1,5 +1,6 @@
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from pydantic import create_model, BaseModel
 from neosyntropy.tools.core.registry import tool
 
@@ -49,6 +50,27 @@ class Toolkit:
             from neosyntropy.tools.core.registry import DEFAULT_REGISTRY
             if tool_name not in DEFAULT_REGISTRY.tools:
                 tool(name=tool_name, description=inspect.getdoc(func) or "", args_model=ArgsModel)(wrapped_func)
+
+    def _check_path(
+        self,
+        relative_path: Union[str, Path],
+        base_dir: Union[str, Path],
+        restrict_to_base_dir: bool = True,
+    ) -> Tuple[bool, Path]:
+        """Resolve ``relative_path`` against ``base_dir``.
+
+        When ``restrict_to_base_dir`` is True, reject absolute paths, ``..``
+        escapes, and symlink hops that leave the base. Callers treat a False
+        first element as deny; the second element is then ``base_dir``.
+        """
+        base = Path(base_dir).resolve()
+        raw = Path(relative_path)
+        if restrict_to_base_dir and raw.is_absolute():
+            return False, base
+        candidate = raw.resolve() if raw.is_absolute() else (base / raw).resolve()
+        if restrict_to_base_dir and not candidate.is_relative_to(base):
+            return False, base
+        return True, candidate
 
     def get_functions(self) -> List[Callable]:
         return list(self.tools)
