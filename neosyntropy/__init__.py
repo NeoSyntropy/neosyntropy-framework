@@ -150,6 +150,8 @@ from .core.node import (
     NodeContext,
     NodeKind,
     NodeMode,
+    DeterministicReasoningNode,
+    StochasticReasoningNode,
     ReasoningNode,
     ReasoningStep,
     SchemaStep,
@@ -394,6 +396,8 @@ __all__ = [
 
     "REASONING_TEXT_KEY",
 
+    "DeterministicReasoningNode",
+    "StochasticReasoningNode",
     "ReasoningNode",
 
     "ReasoningStep",

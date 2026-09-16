@@ -47,7 +47,7 @@ from .base import Node, node
 
 # -- node factory functions & dataclasses ----------------------------------
 from .schema import ReasoningStep, SchemaNode, SchemaStep
-from .reasoning import ReasoningNode
+from .reasoning import DeterministicReasoningNode, ReasoningNode, StochasticReasoningNode
 from .combine import CombineNode
 from .validation import SemanticValidationNode, functional_validation_node
 from .kpi import SemanticKpiNode, functional_kpi_node
@@ -78,6 +78,8 @@ __all__ = [
     "SchemaNode",
     # reasoning
     "ReasoningNode",
+    "StochasticReasoningNode",
+    "DeterministicReasoningNode",
     # combine
     "CombineNode",
     # validation

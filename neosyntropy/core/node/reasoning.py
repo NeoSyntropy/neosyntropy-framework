@@ -11,7 +11,7 @@ objects; the factory then creates a sub-:class:`Workflow` instead of a single
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -19,6 +19,9 @@ from ._utils import _shared_kwargs
 from .base import Node
 from .schema import ReasoningStep, SchemaNode
 from .schemas import REASONING_OUTPUT_SCHEMA
+
+if TYPE_CHECKING:
+    from ..graph import FSM
 
 
 def ReasoningNode(
@@ -37,7 +40,10 @@ def ReasoningNode(
     provider: str = "neosyntropy/base",
     output_schema: type[BaseModel] | dict[str, Any] | None = None,
 ) -> Any:
-    """Provider-backed reasoning: tools allowed, optional structured output.
+    """Compatibility factory for stochastic or fixed-step reasoning.
+
+    Prefer StochasticReasoningNode(prompt=...) or
+    DeterministicReasoningNode(steps=...) in new code.
 
     When ``steps`` is provided the factory builds a multi-step sub-workflow
     (a :class:`~neosyntropy.core.graph.Workflow`) rather than a bare
@@ -124,4 +130,80 @@ def ReasoningNode(
         input_schema=input_schema,
         output_schema=output_schema or REASONING_OUTPUT_SCHEMA,
         handler=None,
+    )
+
+
+def StochasticReasoningNode(
+    id: str,
+    *,
+    input_schema: type[BaseModel] | dict[str, Any],
+    prompt: str,
+    tools: Sequence[str] = (),
+    name: str | None = None,
+    description: str = "",
+    prerequisites: Sequence[str] = (),
+    group: str | None = None,
+    is_fallback: bool = False,
+    metadata: dict[str, Any] | None = None,
+    provider: str = "neosyntropy/base",
+    output_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> Node:
+    """Let the reasoner choose its semantic flow and tools dynamically.
+
+    Uses the existing reasoning execution path, including schema extraction
+    for local tool arguments. Stochastic describes control flow, not a
+    sampling-temperature setting. Use DeterministicReasoningNode for a fixed
+    sequence of reasoning steps.
+    """
+    return ReasoningNode(
+        id,
+        input_schema=input_schema,
+        prompt=prompt,
+        tools=tools,
+        name=name,
+        description=description,
+        prerequisites=prerequisites,
+        group=group,
+        is_fallback=is_fallback,
+        metadata=metadata,
+        provider=provider,
+        output_schema=output_schema,
+    )
+
+
+def DeterministicReasoningNode(
+    id: str,
+    *,
+    input_schema: type[BaseModel] | dict[str, Any],
+    steps: Sequence[ReasoningStep],
+    name: str | None = None,
+    description: str = "",
+    prerequisites: Sequence[str] = (),
+    group: str | None = None,
+    is_fallback: bool = False,
+    metadata: dict[str, Any] | None = None,
+    provider: str = "neosyntropy/base",
+    output_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> FSM:
+    """Run a non-empty, developer-defined sequence of reasoning steps.
+
+    Returns a linear workflow with deterministic transitions. Each step is
+    still a reasoning node and may choose among its allowed tools; neither
+    generated text nor tool choices are guaranteed deterministic. Train the
+    individual ``{id}_step_{i}`` nodes, not the workflow's parent name.
+    """
+    if not steps:
+        raise ValueError(f"DeterministicReasoningNode {id!r} requires non-empty steps")
+    return ReasoningNode(
+        id,
+        input_schema=input_schema,
+        steps=steps,
+        name=name,
+        description=description,
+        prerequisites=prerequisites,
+        group=group,
+        is_fallback=is_fallback,
+        metadata=metadata,
+        provider=provider,
+        output_schema=output_schema,
     )

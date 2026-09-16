@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from neosyntropy import FSM, Client, ReasoningNode, ReasoningStep, ToolRegistry, tool
+from neosyntropy import FSM, Client, DeterministicReasoningNode, ReasoningStep, ToolRegistry, tool
 
 TESTS_ENV_PATH = Path(__file__).resolve().parents[2] / "tests" / ".env"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -121,7 +121,7 @@ def build_tools() -> ToolRegistry:
 
 def build_fsm(provider: str) -> FSM:
     """Build the step-based reasoning graph without performing I/O."""
-    return ReasoningNode(
+    return DeterministicReasoningNode(
         id="SupportDecision",
         input_schema=CaseInput,
         steps=[

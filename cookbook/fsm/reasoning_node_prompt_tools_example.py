@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from neosyntropy import (
     FSM,
     Client,
-    ReasoningNode,
+    StochasticReasoningNode,
     SchemaNode,
     TextOutput,
     ToolRegistry,
@@ -120,7 +120,7 @@ def build_tools() -> ToolRegistry:
 
 def build_fsm(provider: str) -> FSM:
     """Build the tool-enabled reasoning graph without performing I/O."""
-    route = ReasoningNode(
+    route = StochasticReasoningNode(
         id="RouteIntent",
         input_schema=SupportRequest,
         tools=["billing_tool", "shipping_tool", "returns_tool"],
