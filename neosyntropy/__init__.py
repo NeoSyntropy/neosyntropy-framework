@@ -181,6 +181,7 @@ from .cloud.monitor.graph.manifest import (
 
 from .providers.base import Provider, ProviderRegistry
 
+from .providers.neosyntropy import NeoSyntropyProvider, NeoSyntropyProviderError
 from .providers.callable import CallableProvider
 
 from .backend import BackendSemanticRouter
@@ -284,6 +285,8 @@ __all__ = [
 
     "BackendError",
 
+    "NeoSyntropyProvider",
+    "NeoSyntropyProviderError",
     "BackendProvider",
 
     "BackendTelemetryReporter",

@@ -21,6 +21,45 @@ Agent frameworks leave two problems unsolved:
 
 **Get started free:** The first 10,000 developers receive **10,000 free state transitions**. [Create your account](https://neosyntropy.com)
 
+## Use NeoSyntropy from LangGraph or Agno
+
+Install the optional adapter you use:
+
+```bash
+pip install "neosyntropy[langgraph]"
+# or: pip install "neosyntropy[agno]"
+```
+
+The provider sends model traffic to the OpenAI-compatible
+`/api/v1/chat/completions` gateway. Provider credentials stay in NeoSyntropy.
+
+```python
+from neosyntropy.integrations.langgraph import NeoSyntropyChatModel
+
+llm = NeoSyntropyChatModel(
+    api_key="nsk_...",
+    model="default",
+)
+```
+
+For Agno:
+
+```python
+from agno.agent import Agent
+from neosyntropy.integrations.agno import NeoSyntropyModel
+
+agent = Agent(model=NeoSyntropyModel(api_key="nsk_...", model="default"))
+```
+
+You can also use the framework-neutral client directly:
+
+```python
+from neosyntropy import NeoSyntropyProvider
+
+provider = NeoSyntropyProvider.from_env(model="default")
+answer = provider.invoke([{"role": "user", "content": "Hello"}])
+```
+
 ## The problem is not always the model. It is the execution loop.
 
 In production, many AI workflows do not need an autonomous agent that reasons about what to do next and owns the entire execution loop.

@@ -43,9 +43,18 @@ dev = [
     "twine>=5",
 ]
 bench = [
+    "datasets>=3.0",
+    "pypdf>=5.0",
     "langgraph>=0.2",
     "langchain-core>=0.3",
     "langchain-openai>=0.2",
+]
+langgraph = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+]
+agno = [
+    "agno>=1.0",
 ]
 
 [tool.setuptools.packages.find]
