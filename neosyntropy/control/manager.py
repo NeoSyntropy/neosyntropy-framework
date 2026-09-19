@@ -834,7 +834,12 @@ class ControlManager:
             # Executor defaults next_state to the node itself. Still follow a
             # unique deterministic edge to End / a router. Edges to another
             # actionable node are chained as an extra step after commit (below).
-            if len(step_targets) == 1:
+            # Failed nodes must not ride that auto-transition — otherwise a
+            # last-step exception is committed as source → End.
+            if (
+                len(step_targets) == 1
+                and all(result.status == "succeeded" for result in results)
+            ):
                 only = next(iter(step_targets))
                 if merged_next in (None, only):
                     matching = self.graph.first_matching_deterministic(

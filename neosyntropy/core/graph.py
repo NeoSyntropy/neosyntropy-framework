@@ -1694,6 +1694,24 @@ class FSM:
                         ),
                     }
                 )
+            if not last.completed:
+                # A failed or incomplete cycle must not be retried, and must
+                # not be rewritten to completed=True just because a later
+                # hop landed on End.
+                return last.model_copy(
+                    update={
+                        "completed": False,
+                        "steps": all_steps,
+                        "audit": last.audit.model_copy(
+                            update={
+                                "initial_state": initial_state,
+                                "steps": all_steps,
+                                "committed_transitions": all_transitions,
+                                "gate_checks": all_gates,
+                            }
+                        ),
+                    }
+                )
             previous = current
             current = self._follow_terminal_edge(current, snapshot)
             if current == END and previous != END:

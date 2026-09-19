@@ -65,7 +65,7 @@ def _maybe_log_run_sync(client: Any, project_id: str, input_data: Any, result: A
 
 def _last_node_output(result: Any) -> Any:
     """Return the decorated function's output from a workflow run."""
-    if getattr(result, "rejected", False):
+    if getattr(result, "rejected", False) or getattr(result, "completed", True) is False:
         return result
     steps = getattr(result, "steps", None)
     if steps:
