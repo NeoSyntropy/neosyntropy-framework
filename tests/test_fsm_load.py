@@ -637,6 +637,77 @@ def test_bundle_hydration_isolates_shared_module_paths_across_artifacts() -> Non
     assert run_a() == "A"
 
 
+def test_bundle_hydration_does_not_run_host_modules_with_the_same_name() -> None:
+    """A live workspace package must not shadow a published snapshot import.
+
+    Trigger: the host already imported ``pkg.util`` (TOKEN='HOST'). The
+    recovered artifact ships ``pkg/util.py`` with TOKEN='A'. Parent-package
+    ``__path__`` would otherwise keep resolving ``from pkg.util import TOKEN``
+    to the host file, so FSM.load() executes the wrong revision.
+    """
+
+    payload = {
+        "schema_version": 1,
+        "entry_file": "/app/pkg/entry.py",
+        "vfs": {
+            "/app/pkg/entry.py": (
+                "from pkg.util import TOKEN as LOAD_TOKEN\n"
+                "def run():\n"
+                "    from pkg.util import TOKEN\n"
+                "    return LOAD_TOKEN, TOKEN\n"
+            ),
+            "/app/pkg/util.py": "TOKEN = 'A'\n",
+        },
+        "callable": {"name": "run"},
+    }
+    host_pkg = types.ModuleType("pkg")
+    host_pkg.__path__ = ["/tmp/fake-host-pkg"]
+    host_util = types.ModuleType("pkg.util")
+    host_util.TOKEN = "HOST"
+    host_util.__file__ = "/tmp/fake-host-pkg/util.py"
+    sys.modules["pkg"] = host_pkg
+    sys.modules["pkg.util"] = host_util
+    try:
+        run, root = load_bundle_callable(payload, artifact_id="sha256:host-shadow")
+        assert run() == ("A", "A")
+        assert sys.modules["pkg"] is host_pkg
+        assert sys.modules["pkg.util"] is host_util
+        assert sys.modules["pkg.util"].TOKEN == "HOST"
+        assert not any(Path(item).resolve() == Path(root).resolve() for item in sys.path)
+    finally:
+        if sys.modules.get("pkg") is host_pkg:
+            sys.modules.pop("pkg", None)
+        if sys.modules.get("pkg.util") is host_util:
+            sys.modules.pop("pkg.util", None)
+
+
+def test_bundle_hydration_does_not_leave_vfs_on_sys_path() -> None:
+    """After load/call, later host imports must not resolve to the temp VFS."""
+
+    payload = {
+        "schema_version": 1,
+        "entry_file": "/app/pkg/entry.py",
+        "vfs": {
+            "/app/pkg/entry.py": (
+                "def run():\n"
+                "    from pkg.util import TOKEN\n"
+                "    return TOKEN\n"
+            ),
+            "/app/pkg/util.py": "TOKEN = 'A'\n",
+        },
+        "callable": {"name": "run"},
+    }
+    run, root = load_bundle_callable(payload, artifact_id="sha256:path-leak")
+    assert run() == "A"
+    resolved_root = Path(root).resolve()
+    assert not any(Path(item).resolve() == resolved_root for item in sys.path)
+    sys.modules.pop("pkg", None)
+    sys.modules.pop("pkg.util", None)
+    sys.modules.pop("pkg.entry", None)
+    with pytest.raises(ModuleNotFoundError):
+        __import__("pkg.util")
+
+
 def test_load_rejects_incompatible_runtime_before_downloading_code() -> None:
     from neosyntropy.cloud.monitor._manifest import structure_hash
     from neosyntropy.cloud.remote import recovery_revision

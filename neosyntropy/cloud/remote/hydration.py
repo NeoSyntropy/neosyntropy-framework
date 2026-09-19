@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import functools
 import gzip
 import hashlib
+import importlib
 import importlib.metadata
 import inspect
 import json
@@ -13,7 +15,9 @@ import platform
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+import threading
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -326,28 +330,89 @@ def _module_origins(module: Any) -> list[str]:
     return origins
 
 
-def _activate_bundle_root(root: str) -> None:
-    """Make *root* the first import path and drop modules from other bundles.
+def _module_bundle_root(module: Any) -> str | None:
+    for origin in _module_origins(module):
+        found = _bundle_root_of(origin)
+        if found:
+            return found
+    return None
 
-    Each artifact is extracted into its own temp VFS, but shared project paths
-    such as ``pkg/util.py`` become the same ``sys.modules`` key. Leaving the
-    first bundle's slice cached makes later artifacts silently execute the
-    wrong code (or fail to import symbols that only exist in their own slice).
+
+def _bundle_module_names(root: str) -> set[str]:
+    """Import names a materialized VFS can satisfy (``pkg``, ``pkg.util``, …)."""
+    names: set[str] = set()
+    root_path = Path(root)
+    for file in root_path.rglob("*.py"):
+        relative = file.relative_to(root_path)
+        parts = list(relative.parts)
+        if parts[-1] == "__init__.py":
+            parts = parts[:-1]
+        else:
+            parts[-1] = parts[-1][:-3]
+        if not parts or parts[-1] == "":
+            continue
+        for index in range(len(parts)):
+            names.add(".".join(parts[: index + 1]))
+    return names
+
+
+def _shadows_bundle(name: str, provided: set[str]) -> bool:
+    return name in provided or any(name.startswith(f"{item}.") for item in provided)
+
+
+_bundle_thread_lock = threading.RLock()
+_bundle_async_lock: asyncio.Lock | None = None
+
+
+def _async_bundle_lock() -> asyncio.Lock:
+    global _bundle_async_lock
+    if _bundle_async_lock is None:
+        _bundle_async_lock = asyncio.Lock()
+    return _bundle_async_lock
+
+
+@contextmanager
+def _bundle_import_context(root: str) -> Iterator[None]:
+    """Run imports against *root* without leaking into or being shadowed by the host.
+
+    Shared project paths such as ``pkg/util.py`` are the same ``sys.modules``
+    key as the host process (and as every other artifact). Parent packages
+    already imported locally keep ``__path__`` pointed at the host tree, so
+    ``from pkg.util import TOKEN`` silently binds the live workspace instead
+    of the published snapshot. Leaving the temp VFS on ``sys.path`` after
+    the call lets later host imports resolve to a sliced bundle file.
     """
     active = str(Path(root).resolve())
-    stale = [
-        name
-        for name, module in sys.modules.items()
-        if any(
-            (bundle_root := _bundle_root_of(origin)) and bundle_root != active
-            for origin in _module_origins(module)
-        )
-    ]
-    for name in stale:
+    provided = _bundle_module_names(active)
+    saved_path = list(sys.path)
+    saved_host: dict[str, Any] = {}
+    drop: list[str] = []
+    for name, module in list(sys.modules.items()):
+        origin_root = _module_bundle_root(module)
+        if origin_root and origin_root != active:
+            drop.append(name)
+            continue
+        if _shadows_bundle(name, provided) and origin_root != active:
+            saved_host[name] = module
+            drop.append(name)
+    for name in drop:
         sys.modules.pop(name, None)
     if active in sys.path:
         sys.path.remove(active)
     sys.path.insert(0, active)
+    importlib.invalidate_caches()
+    try:
+        yield
+    finally:
+        for name, module in list(sys.modules.items()):
+            origin_root = _module_bundle_root(module)
+            if origin_root == active or (
+                name not in saved_host and _shadows_bundle(name, provided)
+            ):
+                sys.modules.pop(name, None)
+        sys.modules.update(saved_host)
+        sys.path[:] = saved_path
+        importlib.invalidate_caches()
 
 
 def _isolate_bundle_callable(fn: Callable[..., Any], root: str) -> Callable[..., Any]:
@@ -356,15 +421,16 @@ def _isolate_bundle_callable(fn: Callable[..., Any], root: str) -> Callable[...,
     if inspect.iscoroutinefunction(fn):
 
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            _activate_bundle_root(root)
-            return await fn(*args, **kwargs)
+            async with _async_bundle_lock():
+                with _bundle_import_context(root):
+                    return await fn(*args, **kwargs)
 
         wrapper: Callable[..., Any] = async_wrapper
     else:
 
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            _activate_bundle_root(root)
-            return fn(*args, **kwargs)
+            with _bundle_thread_lock, _bundle_import_context(root):
+                return fn(*args, **kwargs)
 
         wrapper = sync_wrapper
     try:
@@ -424,9 +490,9 @@ def load_bundle_callable(
     if function_name != source_name and source_name not in {"", "<lambda>"}:
         entry_source += f"\n{function_name} = {source_name}\n"
     root_string = str(root)
-    _activate_bundle_root(root_string)
     try:
-        exec(compile(entry_source, entry_file, "exec"), namespace)
+        with _bundle_thread_lock, _bundle_import_context(root_string):
+            exec(compile(entry_source, entry_file, "exec"), namespace)
     except Exception as exc:
         raise CodeBundleError(
             f"could not load entry function {function_name!r}: {exc}"
