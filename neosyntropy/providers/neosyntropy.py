@@ -16,11 +16,47 @@ class NeoSyntropyProviderError(RuntimeError):
     """Raised when the NeoSyntropy chat gateway rejects a request."""
 
 
+# OpenAI-compatible chat.completions fields. Framework adapters (Agno, LangGraph)
+# forward their own invoke kwargs; those must not be JSON-encoded into the body.
+_CHAT_COMPLETION_KEYS = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "n",
+        "stream",
+        "stream_options",
+        "stop",
+        "max_tokens",
+        "max_completion_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "user",
+        "seed",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "response_format",
+        "metadata",
+    }
+)
+
+
 @dataclass(frozen=True)
 class ChatResult:
     content: str
     raw: dict[str, Any]
     tool_calls: tuple[dict[str, Any], ...] = ()
+
+
+def _jsonable(value: Any) -> bool:
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return True
 
 
 def _content(value: Any) -> str | list[dict[str, Any]]:
@@ -93,11 +129,19 @@ class NeoSyntropyProvider:
         }
         if self.project_id:
             payload["metadata"] = {"project_id": self.project_id}
-        payload.update({key: value for key, value in kwargs.items() if value is not None})
+        for key, value in kwargs.items():
+            if key not in _CHAT_COMPLETION_KEYS or value is None or not _jsonable(value):
+                continue
+            payload[key] = value
         return payload
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
+        try:
+            body = json.dumps(payload).encode("utf-8")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise NeoSyntropyProviderError(
+                "NeoSyntropy chat request is not JSON-serializable"
+            ) from exc
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if self.project_id:
             headers["X-NeoSyntropy-Project-ID"] = self.project_id
